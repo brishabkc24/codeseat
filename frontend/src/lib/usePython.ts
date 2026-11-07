@@ -38,11 +38,16 @@ function merge(current: OutputChunk[], incoming: OutputChunk[]): OutputChunk[] {
   return next;
 }
 
+export type RunOptions = {
+  /** Lines to answer input() with, one per line. Without it input() asks the user. */
+  stdin?: string;
+};
+
 /**
  * Python in a Web Worker (see public/py-worker.js). `onFinish` is told how
- * each run ended; a run the user stopped is not reported.
+ * each run ended and everything it printed; a run the user stopped is not reported.
  */
-export function usePython(onFinish?: (result: RunResult) => void) {
+export function usePython(onFinish?: (result: RunResult, output: OutputChunk[]) => void) {
   const [phase, setPhaseState] = useState<PythonPhase>("loading");
   const phaseRef = useRef<PythonPhase>("loading");
   const setPhase = useCallback((next: PythonPhase) => {
@@ -50,7 +55,12 @@ export function usePython(onFinish?: (result: RunResult) => void) {
     setPhaseState(next);
   }, []);
   const [failure, setFailure] = useState("");
-  const [output, setOutput] = useState<OutputChunk[]>([]);
+  const [output, setOutputState] = useState<OutputChunk[]>([]);
+  const outputRef = useRef<OutputChunk[]>([]);
+  const setOutput = useCallback((update: (current: OutputChunk[]) => OutputChunk[]) => {
+    outputRef.current = update(outputRef.current); // complete at once, for onFinish
+    setOutputState(outputRef.current);
+  }, []);
   const [waitingForInput, setWaitingForInput] = useState(false);
 
   const workerRef = useRef<Worker | null>(null);
@@ -106,7 +116,7 @@ export function usePython(onFinish?: (result: RunResult) => void) {
               withNote(current, "Stopped: the program printed more than 200,000 characters."),
             );
           }
-          finishRef.current?.(message.status === "ok" ? "ok" : "error");
+          finishRef.current?.(message.status === "ok" ? "ok" : "error", outputRef.current);
           break;
       }
     };
@@ -118,7 +128,7 @@ export function usePython(onFinish?: (result: RunResult) => void) {
     };
 
     worker.postMessage(init);
-  }, [setPhase]);
+  }, [setPhase, setOutput]);
 
   useEffect(() => {
     boot();
@@ -128,15 +138,18 @@ export function usePython(onFinish?: (result: RunResult) => void) {
     };
   }, [boot]);
 
-  const run = useCallback((source: string) => {
-    const worker = workerRef.current;
-    if (!worker || phaseRef.current !== "ready") return;
-    runId.current += 1;
-    setOutput([]);
-    setWaitingForInput(false);
-    setPhase("running");
-    worker.postMessage({ type: "run", id: runId.current, source });
-  }, [setPhase]);
+  const run = useCallback(
+    (source: string, options: RunOptions = {}) => {
+      const worker = workerRef.current;
+      if (!worker || phaseRef.current !== "ready") return;
+      runId.current += 1;
+      setOutput(() => []);
+      setWaitingForInput(false);
+      setPhase("running");
+      worker.postMessage({ type: "run", id: runId.current, source, stdin: options.stdin });
+    },
+    [setPhase, setOutput],
+  );
 
   /** Ends a running program. Python cannot be interrupted, so it is restarted. */
   const stop = useCallback(() => {
@@ -147,7 +160,7 @@ export function usePython(onFinish?: (result: RunResult) => void) {
     setWaitingForInput(false);
     setOutput((current) => withNote(current, "Stopped."));
     boot();
-  }, [boot]);
+  }, [boot, setOutput]);
 
   const sendInput = useCallback((text: string) => {
     const stdin = stdinRef.current;
@@ -159,7 +172,7 @@ export function usePython(onFinish?: (result: RunResult) => void) {
     Atomics.notify(stdin.meta, 0);
     setWaitingForInput(false);
     setOutput((current) => merge(current, [{ stream: "stdin", text: `${text}\n` }]));
-  }, []);
+  }, [setOutput]);
 
   return { phase, failure, output, waitingForInput, run, stop, sendInput };
 }

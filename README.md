@@ -18,8 +18,17 @@ Milestone 1, the live classroom core, works locally:
 - Teacher's seat map with each student's last run result, and a live view of any seat
 - A reload or a dropped connection returns you to your seat with your code
 
-Planned next: lesson steps with expected-output checks, teacher accounts and saved
-classes, deployment.
+Milestone 2, lesson steps, works locally:
+
+- The teacher writes the lesson as numbered steps: a task, optional lines for
+  `input()`, and the exact output a program must print
+- Students see the steps beside their editor, open one and check it: their program
+  runs with the step's input and the server compares what it printed
+- A pass shows on the student's list, as a count on their seat on the teacher's map,
+  and step by step when the teacher opens that seat
+- The teacher can point the class at a step, marked "Now" on every screen
+
+Planned next: teacher accounts and saved classes, deployment.
 
 ## Run it
 
@@ -59,14 +68,17 @@ npm run typecheck
 
 | Part | Where | What it does |
 | --- | --- | --- |
-| Classroom rules | `backend/app/rooms.py` | Seats, students and what each role may see, with no web code |
+| Classroom rules | `backend/app/rooms.py` | Seats, students, lesson steps and what each role may see, with no web code |
 | Server | `backend/app/main.py` | REST to open a class, one WebSocket per person in it |
 | Live connection | `frontend/src/lib/useClassroom.ts` | Mirrors the class state and reconnects when the link drops |
 | Python runner | `frontend/public/py-worker.js` | Pyodide in a Web Worker, so an endless loop cannot freeze the page |
 | Screens | `frontend/src/pages/` | Start page, student room, teacher room |
 
-Two things to know before deploying:
+Three things to know before deploying:
 
 - Classes live in the server's memory. Restarting the server ends every class.
 - `input()` needs the page to be cross-origin isolated. The dev server sends the two
   headers for that (see `frontend/vite.config.ts`); production hosting must send them too.
+- A step check is judged by the server, but from the output the student's browser
+  reports, since code never runs on the server. That keeps a lesson honest in class; it
+  is not proof against a student who edits what their browser sends.

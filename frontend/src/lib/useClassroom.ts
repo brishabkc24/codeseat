@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
-import type { ClassInfo, Hello, Seat, ServerMessage, You } from "./protocol";
+import type { ClassInfo, Hello, Seat, ServerMessage, Step, You } from "./protocol";
 
 export type CloseReason = "no-class" | "not-teacher" | "replaced" | "refused";
 
@@ -20,8 +20,15 @@ export type Classroom = {
   /** Teacher only: names of students who have not picked a seat yet. */
   lobby: string[];
   teacherSource: string;
+  steps: Step[];
+  /** The step the teacher has pointed the class at, if any. */
+  currentStep: string | null;
+  /** Counts lesson updates, so the editor can tell when its save has landed. */
+  lessonSeq: number;
   /** Student only. */
   you: You | null;
+  /** Student only: the server's verdict on the latest check; seq tells one from the next. */
+  lastCheck: { step: string; passed: boolean; seq: number } | null;
   /** Teacher only: the latest code of the seat being watched. */
   studentSource: { seat: number; text: string } | null;
   /** The last refusal from the server, for example a seat that was just taken. */
@@ -38,7 +45,11 @@ const initial: Classroom = {
   seats: [],
   lobby: [],
   teacherSource: "",
+  steps: [],
+  currentStep: null,
+  lessonSeq: 0,
   you: null,
+  lastCheck: null,
   studentSource: null,
   notice: null,
   joins: 0,
@@ -73,18 +84,40 @@ function reduce(state: Classroom, action: Action): Classroom {
             seats: message.seats,
             lobby: message.lobby ?? [],
             teacherSource: message.teacherSource,
+            steps: message.steps,
+            currentStep: message.currentStep,
             you: message.you ?? null,
             notice: null,
             joins: state.joins + 1,
           };
         case "seats":
           return { ...state, seats: message.seats, lobby: message.lobby ?? state.lobby };
-        case "you":
-          return state.you ? { ...state, you: { ...state.you, seat: message.seat } } : state;
+        case "you": {
+          if (!state.you) return state;
+          const you = { ...state.you };
+          if (message.seat !== undefined) you.seat = message.seat;
+          if (message.passed !== undefined) you.passed = message.passed;
+          return { ...state, you };
+        }
         case "teacher_source":
           return { ...state, teacherSource: message.text };
         case "student_source":
           return { ...state, studentSource: { seat: message.seat, text: message.text } };
+        case "steps":
+          return {
+            ...state,
+            steps: message.steps,
+            currentStep: message.currentStep,
+            lessonSeq: state.lessonSeq + 1,
+          };
+        case "check": {
+          const seq = (state.lastCheck?.seq ?? 0) + 1;
+          const you =
+            state.you && message.passed && !state.you.passed.includes(message.step)
+              ? { ...state.you, passed: [...state.you.passed, message.step] }
+              : state.you;
+          return { ...state, you, lastCheck: { step: message.step, passed: message.passed, seq } };
+        }
         case "error":
           return { ...state, notice: message.message };
         default:

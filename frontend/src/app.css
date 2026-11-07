@@ -1,7 +1,8 @@
 /* Hallmark · shape: app screen · genre: modern-minimal · theme: Rim (deal 2/3, seed codeseat-real-time-classroom-coding-14d9·e03e81e0·2026-11-06·r0)
  * nav: a top bar holding the wordmark, the class with its join code, and the connection state · signature: the seat map, the classroom drawn desk by desk · states: connecting, reconnecting, closed, empty room, full room, Python loading, running, waiting for input, failed
  * axes: dark/grotesk-sans/warm · posture: committed · contrast: pass · v2.0.0 */
-/* Hallmark · pre-emit critique: P4 H4 E4 S5 R4 V4 · weakest: H, three panes compete on the teacher's screen; the seat map takes the right half under one row of figures so the eye lands on the room before the editors */
+/* Hallmark · pre-emit critique: P4 H4 E4 S5 R4 V4 · weakest: H, three panes compete on the teacher's screen; the seat map takes the right half under one row of figures so the eye lands on the room before the editors
+ * milestone 2 · lesson steps: the student's lesson pane sits above the teacher's code, one accent (the Now marker) and one success colour (a pass); the teacher's lesson list and seat passes reuse the step row, so progress reads the same on both sides */
 @import url("./tokens.css");
 @import url("./base.css");
 
@@ -223,6 +224,13 @@
 
 .input--mono {
   font-family: var(--font-outlier);
+}
+
+.input--area {
+  min-height: 5rem;
+  padding-block: var(--space-xs);
+  line-height: 1.5;
+  resize: vertical;
 }
 
 .status {
@@ -470,6 +478,24 @@ button.seat:focus-visible {
   color: var(--color-muted);
 }
 
+/* Passed steps out of all steps, in the seat's bottom right. */
+.seat__steps {
+  position: absolute;
+  right: var(--space-xs);
+  bottom: var(--space-xs);
+  font: 400 var(--text-xs) / 1.2 var(--font-outlier);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-muted);
+}
+
+.seat__steps--all {
+  color: var(--color-success);
+}
+
+.seat--taken:has(.seat__steps) {
+  padding-bottom: calc(var(--space-xs) + 1.2em);
+}
+
 /* The chosen seat: sunk paper, an orange edge and an orange square. */
 .seat--current {
   background: var(--color-paper-3);
@@ -555,6 +581,23 @@ button.seat:focus-visible {
 
 .pane + .pane {
   border-left: var(--rule-hair) solid var(--color-rule);
+}
+
+/* Two panes stacked in one column of the workspace. */
+.column {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.column + .pane {
+  border-left: var(--rule-hair) solid var(--color-rule);
+}
+
+.column > .pane + .pane {
+  border-left: 0;
+  border-top: var(--rule-hair) solid var(--color-rule);
 }
 
 .pane--split {
@@ -667,11 +710,331 @@ button.seat:focus-visible {
   padding: var(--space-xs) var(--space-md) var(--space-sm);
 }
 
+/* ---------------------------------------------------------------- lesson steps */
+
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+}
+
+.step {
+  display: grid;
+  grid-template-columns: 2ch minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: var(--space-sm);
+  width: 100%;
+  min-height: var(--control);
+  padding: var(--space-xs) var(--space-md);
+  border: 0;
+  border-bottom: var(--rule-hair) solid var(--color-rule-2);
+  background: transparent;
+  color: var(--color-ink-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-short) var(--ease-out);
+}
+
+@media (hover: hover) {
+  .step:hover {
+    background: var(--color-paper-2);
+  }
+}
+
+.step:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+
+.step__num {
+  font: 400 var(--text-xs) / 1.2 var(--font-outlier);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-muted);
+}
+
+.step__title {
+  font-size: var(--text-sm);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+/* Where the teacher has pointed the class. */
+.step__now {
+  font-size: var(--text-xs);
+  line-height: 1.2;
+  color: var(--color-accent);
+}
+
+.step__mark,
+.step__count {
+  font: 400 var(--text-xs) / 1.2 var(--font-outlier);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+
+.step--passed .step__mark {
+  color: var(--color-success);
+}
+
+.step--passed .step__title {
+  color: var(--color-muted);
+}
+
+.step--selected {
+  background: var(--color-paper-3);
+  color: var(--color-ink);
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+.step--selected .step__title {
+  color: var(--color-ink);
+}
+
+.step--now {
+  color: var(--color-ink);
+}
+
+.lesson__body {
+  overflow-y: auto;
+}
+
+.task {
+  display: grid;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+}
+
+.task__title {
+  max-width: none;
+  font-size: var(--text-md);
+  letter-spacing: 0;
+  line-height: 1.3;
+}
+
+.task__text {
+  max-width: 60ch;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  color: var(--color-ink-2);
+  white-space: pre-line;
+}
+
+.task__io {
+  display: grid;
+  gap: var(--space-2xs);
+}
+
+.task__label {
+  max-width: none;
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+}
+
+.task__block {
+  margin: 0;
+  padding: var(--space-xs) var(--space-sm);
+  border: var(--rule-hair) solid var(--color-rule-2);
+  background: var(--color-paper-3);
+  font: 400 var(--text-code) / 1.6 var(--font-outlier);
+  color: var(--color-ink-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* The line runs to the block's left edge, where an inset shadow marks it without moving the text. */
+.task__line--diff {
+  color: var(--color-error);
+  box-shadow: inset 2px 0 0 var(--color-error);
+  margin-left: calc(-1 * var(--space-sm));
+  padding-left: var(--space-sm);
+}
+
+.task__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding-top: var(--space-2xs);
+}
+
+.task__hint {
+  max-width: none;
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+}
+
+.task__verdict {
+  display: grid;
+  gap: var(--space-2xs);
+  padding: var(--space-sm) var(--space-md);
+  border-left: 2px solid var(--color-success);
+  background: var(--color-paper-2);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+}
+
+.task__verdict p {
+  max-width: none;
+}
+
+.task__verdict--no {
+  border-left-color: var(--color-error);
+}
+
+/* Passed steps of the student being watched, one square per step. */
+.marks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3xs);
+}
+
+.mark {
+  display: grid;
+  place-items: center;
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding-inline: var(--space-3xs);
+  border: var(--rule-hair) solid var(--color-rule);
+  font: 400 var(--text-xs) / 1 var(--font-outlier);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-muted);
+}
+
+.mark--passed {
+  border-color: var(--color-success);
+  background: color-mix(in oklab, var(--color-success) 18%, transparent);
+  color: var(--color-ink);
+}
+
+/* ---------------------------------------------------------------- the lesson editor */
+
+.lesson-page {
+  flex: 1;
+  width: 100%;
+  max-width: 64rem;
+  margin-inline: auto;
+  padding: var(--space-xl) var(--gutter) var(--space-3xl);
+}
+
+.lesson-editor {
+  display: grid;
+  gap: var(--space-lg);
+  justify-items: start;
+}
+
+.lesson-editor__head {
+  width: 100%;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--space-lg);
+  padding-bottom: var(--space-md);
+  border-bottom: var(--rule-hair) solid var(--color-rule);
+}
+
+.lesson-editor__intro {
+  display: grid;
+  gap: var(--space-xs);
+}
+
+.lesson-editor__intro h2 {
+  font-size: var(--text-2xl);
+  letter-spacing: -0.03em;
+}
+
+.lesson-editor__intro .lead {
+  color: var(--color-ink-2);
+}
+
+.lesson-editor__actions {
+  display: flex;
+  gap: var(--space-sm);
+  flex-shrink: 0;
+}
+
+.lesson-editor > .notice {
+  width: 100%;
+}
+
+.lesson-editor__none {
+  color: var(--color-muted);
+}
+
+.lesson-editor__list {
+  list-style: none;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-lg);
+}
+
+.step-form {
+  display: grid;
+  gap: var(--space-md);
+  margin: 0;
+  padding: var(--space-md) var(--space-lg) var(--space-lg);
+  border: var(--rule-hair) solid var(--color-rule);
+  min-width: 0;
+}
+
+.step-form__legend {
+  padding-inline: var(--space-xs);
+  font-family: var(--font-outlier);
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+
+.step-form__tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.step-form__tools .btn {
+  min-height: var(--control-small);
+  padding-inline: var(--space-sm);
+}
+
+.step-form__tools .btn::before {
+  inset: -6px 0;
+}
+
+.step-form__io {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-md);
+}
+
 /* ---------------------------------------------------------------- the teacher's view of the room */
 
 .desk {
-  grid-template-rows: auto auto minmax(16rem, 1fr);
+  grid-template-rows: auto auto auto minmax(16rem, 1fr);
   overflow-y: auto;
+}
+
+.desk__lesson {
+  border-bottom: var(--rule-hair) solid var(--color-rule-2);
+}
+
+.desk__lesson .pane__head {
+  border-bottom: 0;
+}
+
+.desk__hint {
+  max-width: 60ch;
+  padding: 0 var(--space-md) var(--space-md);
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+
+.steps--desk .step:last-child {
+  border-bottom: 0;
 }
 
 .desk__top {
@@ -733,6 +1096,12 @@ button.seat:focus-visible {
   grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
   border-top: var(--rule-hair) solid var(--color-rule);
+}
+
+/* Name, step marks, state and two buttons: let them wrap rather than clip. */
+.viewer .pane__head {
+  flex-wrap: wrap;
+  padding-block: var(--space-xs);
 }
 
 .viewer__loading {
@@ -811,9 +1180,34 @@ button.seat:focus-visible {
     height: 70dvh;
   }
 
-  .pane + .pane {
+  .pane + .pane,
+  .column + .pane {
     border-left: 0;
     border-top: var(--rule-hair) solid var(--color-rule);
+  }
+
+  /* The stacked column dissolves: its panes stack with the rest. */
+  .column {
+    display: contents;
+  }
+
+  .lesson-editor__head {
+    flex-direction: column;
+    align-items: start;
+  }
+
+  .step-form {
+    padding-inline: var(--space-md);
+  }
+
+  .step-form__io {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .task__actions {
+    flex-direction: column;
+    align-items: start;
+    gap: var(--space-xs);
   }
 
   .desk {
@@ -830,6 +1224,7 @@ button.seat:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .btn,
   .input,
+  .step,
   button.seat {
     transition: none;
   }

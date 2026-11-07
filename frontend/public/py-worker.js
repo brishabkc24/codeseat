@@ -2,7 +2,8 @@
 // the page. The page talks to this worker with messages:
 //
 //   page -> worker   { type: "init", meta?, bytes? }   start Python (buffers allow input())
-//                    { type: "run", id, source }        run a program
+//                    { type: "run", id, source, stdin? } run a program; stdin, when given, is
+//                                                      text whose lines answer input() in turn
 //   worker -> page   { type: "ready" } | { type: "failed", message }
 //                    { type: "output", chunks: [[stream, text], ...] }
 //                    { type: "input" }                  the program is waiting for a line
@@ -18,6 +19,14 @@ const FLUSH_MS = 40;
 
 let runProgram = null;
 let stdin = null; // { meta: Int32Array, bytes: Uint8Array } when input() is available
+let script = null; // lines still to hand to input() during a run with stdin given
+
+/** "3\n4\n" and "3\n4" are both two lines; "" is none. */
+function toLines(text) {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
 
 let chunks = [];
 let chunkChars = 0;
@@ -48,11 +57,12 @@ const host = {
   },
 
   can_read() {
-    return stdin !== null;
+    return script !== null || stdin !== null;
   },
 
-  // Blocks this worker until the page hands over a line of input.
+  // Answers from the given lines, or blocks this worker until the page hands over a line.
   read_line() {
+    if (script !== null) return script.length > 0 ? script.shift() : null;
     flush();
     Atomics.store(stdin.meta, 0, 0);
     postMessage({ type: "input" });
@@ -151,6 +161,7 @@ async function start(message) {
 function run(message) {
   printed = 0;
   lastFlush = performance.now();
+  script = typeof message.stdin === "string" ? toLines(message.stdin) : null;
   let status;
   try {
     status = runProgram(message.source);

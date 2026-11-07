@@ -4,15 +4,26 @@ export type ClassInfo = { code: string; title: string; rows: number; cols: numbe
 
 export type RunResult = "ok" | "error";
 
+/** One task of the lesson. It passes when a program prints the expected output. */
+export type Step = {
+  id: string;
+  title: string;
+  instructions: string;
+  expectedOutput: string;
+  /** Lines handed to input(), one per line; empty when the program gets no input. */
+  input: string;
+};
+
 export type Seat = {
   seat: number;
   name: string;
   online: boolean;
-  /** Only the teacher receives this. */
+  /** Only the teacher receives these two. */
   lastRun?: RunResult | null;
+  passed?: string[];
 };
 
-export type You = { id: string; name: string; seat: number | null; source: string };
+export type You = { id: string; name: string; seat: number | null; source: string; passed: string[] };
 
 export type ServerMessage =
   | {
@@ -20,13 +31,17 @@ export type ServerMessage =
       class: ClassInfo;
       seats: Seat[];
       teacherSource: string;
+      steps: Step[];
+      currentStep: string | null;
       lobby?: string[];
       you?: You;
     }
   | { type: "seats"; seats: Seat[]; lobby?: string[] }
-  | { type: "you"; seat: number | null }
+  | { type: "you"; seat?: number | null; passed?: string[] }
   | { type: "teacher_source"; text: string }
   | { type: "student_source"; seat: number; text: string }
+  | { type: "steps"; steps: Step[]; currentStep: string | null }
+  | { type: "check"; step: string; passed: boolean }
   | { type: "error"; message: string };
 
 export type Hello =

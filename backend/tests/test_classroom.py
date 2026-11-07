@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app import main
-from app.rooms import ROOM_TTL_SECONDS, ClassroomStore, RoomError
+from app.rooms import MAX_STEPS, ROOM_TTL_SECONDS, ClassroomStore, RoomError, outputs_match
 
 
 @pytest.fixture
@@ -54,6 +54,28 @@ def teacher(client, room):
 def sit(ws, seat):
     ws.send_json({"type": "take_seat", "seat": seat})
     return next_of(ws, "you")
+
+
+STEP = {"title": "Say hello", "instructions": "Print a greeting.", "expectedOutput": "Hello, world!\n", "input": ""}
+SUM_STEP = {"title": "Add two numbers", "expectedOutput": "7", "input": "3\n4\n"}
+
+
+def set_steps(desk, steps):
+    desk.send_json({"type": "set_steps", "steps": steps})
+    return next_of(desk, "steps")
+
+
+def check(ws, step_id, output, status="ok"):
+    ws.send_json({"type": "check", "step": step_id, "status": status, "output": output})
+    return next_of(ws, "check")
+
+
+def seats_with(desk, wanted):
+    """Teacher seat lists arrive in bursts; wait for the one that satisfies `wanted`."""
+    while True:
+        message = next_of(desk, "seats")
+        if wanted(message["seats"]):
+            return message["seats"]
 
 
 # ---------------------------------------------------------------- REST
@@ -156,6 +178,7 @@ def test_rejoining_keeps_the_seat_and_the_code(client):
             "name": "Asha",
             "seat": 2,
             "source": "print('hi')",
+            "passed": [],
         }
 
 
@@ -169,7 +192,7 @@ def test_seat_shows_offline_after_the_student_disconnects(client):
                 seats = next_of(desk, "seats")
             assert seats["seats"][0]["online"] is True
         seats = next_of(desk, "seats")
-        assert seats["seats"] == [{"seat": 0, "name": "Asha", "online": False, "lastRun": None}]
+        assert seats["seats"] == [{"seat": 0, "name": "Asha", "online": False, "lastRun": None, "passed": []}]
 
 
 # ---------------------------------------------------------------- live code
@@ -252,7 +275,7 @@ def test_run_results_go_to_the_teacher_only(client):
         seats = next_of(desk, "seats")
         while not any(seat.get("lastRun") for seat in seats["seats"]):
             seats = next_of(desk, "seats")
-        assert seats["seats"][0] == {"seat": 0, "name": "Asha", "online": True, "lastRun": "error"}
+        assert seats["seats"][0] == {"seat": 0, "name": "Asha", "online": True, "lastRun": "error", "passed": []}
         assert seats["lobby"] == []
 
         bikram.send_json({"type": "leave_seat"})
@@ -268,8 +291,11 @@ def test_students_cannot_use_teacher_messages(client):
         sit(bikram, 1)
         bikram.send_json({"type": "free_seat", "seat": 0})
         bikram.send_json({"type": "watch", "seat": 0})
+        bikram.send_json({"type": "set_steps", "steps": [STEP]})
+        bikram.send_json({"type": "set_current_step", "step": None})
         assert sit(bikram, 1)["seat"] == 1  # still served, and the messages above did nothing
         assert main.store.get(room["code"]).student_at(0).name == "Asha"
+        assert main.store.get(room["code"]).steps == []
 
 
 def test_teacher_can_free_a_seat(client):
@@ -293,6 +319,144 @@ def test_a_second_tab_takes_over_from_the_first(client):
             assert closed.value.code == main.CLOSE_REPLACED
             assert second.welcome["you"]["seat"] == 0
             assert main.store.get(room["code"]).students[student_id].online is True
+
+
+# ---------------------------------------------------------------- lesson steps
+
+
+def test_lesson_reaches_everyone_live_and_on_joining(client):
+    room = open_class(client)
+    with teacher(client, room) as desk, student(client, room["code"], "Asha") as asha:
+        lesson = set_steps(desk, [STEP, SUM_STEP])
+        assert [step["title"] for step in lesson["steps"]] == ["Say hello", "Add two numbers"]
+        assert all(step["id"] for step in lesson["steps"])
+        assert lesson["currentStep"] is None
+        assert next_of(asha, "steps") == lesson
+
+        with student(client, room["code"], "Bikram") as late:
+            assert late.welcome["steps"] == lesson["steps"]
+            assert late.welcome["you"]["passed"] == []
+
+
+def test_lesson_is_validated_and_left_alone_on_a_bad_save(client):
+    room = open_class(client)
+    with teacher(client, room) as desk:
+        set_steps(desk, [STEP])
+
+        desk.send_json({"type": "set_steps", "steps": [{"title": "", "expectedOutput": "x"}]})
+        assert next_of(desk, "error")["message"] == "Step 1's title is missing."
+        desk.send_json({"type": "set_steps", "steps": [STEP, {"title": "No check"}]})
+        assert next_of(desk, "error")["message"] == "Step 2's expected output is missing."
+        desk.send_json({"type": "set_steps", "steps": [STEP] * (MAX_STEPS + 1)})
+        assert next_of(desk, "error")["message"] == f"A lesson can have up to {MAX_STEPS} steps."
+        desk.send_json({"type": "set_steps", "steps": "nope"})
+        assert next_of(desk, "error")["message"] == "Steps must be a list."
+
+        assert [step.title for step in main.store.get(room["code"]).steps] == ["Say hello"]
+
+
+def test_a_check_passes_on_the_expected_output_and_the_teacher_sees_it(client):
+    room = open_class(client)
+    with teacher(client, room) as desk, student(client, room["code"], "Asha") as asha:
+        hello, total = set_steps(desk, [STEP, SUM_STEP])["steps"]
+        sit(asha, 0)
+
+        # Spaces at the ends of lines and blank lines at the end do not count.
+        verdict = check(asha, hello["id"], "Hello, world!   \r\n\n")
+        assert verdict == {"type": "check", "step": hello["id"], "passed": True}
+        seats = seats_with(desk, lambda seats: seats and seats[0]["passed"])
+        assert seats[0] == {"seat": 0, "name": "Asha", "online": True, "lastRun": "ok", "passed": [hello["id"]]}
+
+        assert check(asha, total["id"], "8")["passed"] is False
+        assert check(asha, total["id"], "7\n", status="error")["passed"] is False  # a crash never passes
+        assert check(asha, total["id"], "7")["passed"] is True
+        seats = seats_with(desk, lambda seats: len(seats[0]["passed"]) == 2)
+        assert seats[0]["passed"] == [hello["id"], total["id"]]  # lesson order, not the order passed
+
+        # A pass is kept, so a later failing run does not take it away.
+        assert check(asha, hello["id"], "Goodbye")["passed"] is False
+        student_id = asha.welcome["you"]["id"]
+    with student(client, room["code"], "Asha", student_id) as back:
+        assert back.welcome["you"]["passed"] == [hello["id"], total["id"]]
+
+
+def test_students_never_see_who_passed(client):
+    room = open_class(client)
+    with teacher(client, room) as desk, student(client, room["code"], "Asha") as asha:
+        (hello,) = set_steps(desk, [STEP])["steps"]
+        sit(asha, 0)
+        check(asha, hello["id"], "Hello, world!")
+        with student(client, room["code"], "Bikram") as bikram:
+            for seat in bikram.welcome["seats"]:
+                assert "passed" not in seat and "lastRun" not in seat
+
+
+def test_checking_an_unknown_step_is_an_error(client):
+    room = open_class(client)
+    with student(client, room["code"], "Asha") as asha:
+        asha.send_json({"type": "check", "step": "gone", "status": "ok", "output": ""})
+        assert next_of(asha, "error")["message"] == "That step is not in the lesson any more."
+
+
+def test_editing_a_step_keeps_passes_unless_its_check_changed(client):
+    room = open_class(client)
+    with teacher(client, room) as desk, student(client, room["code"], "Asha") as asha:
+        hello, total = set_steps(desk, [STEP, SUM_STEP])["steps"]
+        sit(asha, 0)
+        check(asha, hello["id"], "Hello, world!")
+        check(asha, total["id"], "7")
+
+        # Reworded and reordered, same checks: both passes stay and the ids are kept.
+        reworded = {**total, "title": "Sum two numbers", "instructions": "Read two numbers."}
+        lesson = set_steps(desk, [reworded, hello])
+        assert [step["id"] for step in lesson["steps"]] == [total["id"], hello["id"]]
+        assert next_of(asha, "you")["passed"] == [total["id"], hello["id"]]
+
+        # A new expected output means the old pass proves nothing.
+        harder = {**hello, "expectedOutput": "Hello, Asha!"}
+        set_steps(desk, [total, harder])
+        assert next_of(asha, "you")["passed"] == [total["id"]]
+        seats = seats_with(desk, lambda seats: seats[0]["passed"] == [total["id"]])
+        assert seats[0]["passed"] == [total["id"]]
+
+        # A removed step takes its pass with it.
+        set_steps(desk, [harder])
+        assert next_of(asha, "you")["passed"] == []
+
+
+def test_teacher_points_the_class_at_a_step(client):
+    room = open_class(client)
+    with teacher(client, room) as desk, student(client, room["code"], "Asha") as asha:
+        hello, total = set_steps(desk, [STEP, SUM_STEP])["steps"]
+        next_of(asha, "steps")
+
+        desk.send_json({"type": "set_current_step", "step": total["id"]})
+        assert next_of(desk, "steps")["currentStep"] == total["id"]
+        assert next_of(asha, "steps")["currentStep"] == total["id"]
+
+        desk.send_json({"type": "set_current_step", "step": "gone"})
+        assert next_of(desk, "error")["message"] == "That step is not in the lesson any more."
+
+        # Dropping the step the class is on clears the pointer.
+        assert set_steps(desk, [hello])["currentStep"] is None
+
+        desk.send_json({"type": "set_current_step", "step": None})
+        assert next_of(desk, "steps")["currentStep"] is None
+
+
+@pytest.mark.parametrize(
+    ("expected", "actual", "same"),
+    [
+        ("7", "7\n", True),
+        ("a\nb", "a  \r\nb\n\n", True),
+        ("a\nb", "a\n\nb", False),  # a blank line in the middle counts
+        ("Hello", "hello", False),  # case counts
+        ("", "\n\n", True),
+        (" x", "x", False),  # leading spaces count
+    ],
+)
+def test_outputs_match_rules(expected, actual, same):
+    assert outputs_match(expected, actual) is same
 
 
 # ---------------------------------------------------------------- rules on their own

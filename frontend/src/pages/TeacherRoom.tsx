@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useParams, useSearchParams } from "react-router-dom";
 import { CodeEditor } from "../components/CodeEditor";
+import { LessonEditor, type StepDraft } from "../components/LessonEditor";
 import { RoomClosed, RoomLoading } from "../components/RoomStates";
 import { RunPanel } from "../components/RunPanel";
 import { SeatMap } from "../components/SeatMap";
 import { TopBar } from "../components/TopBar";
 import { loadTeacherToken } from "../lib/api";
+import { classes } from "../lib/lesson";
 import { type Hello, type Seat, seatLabel } from "../lib/protocol";
 import { useClassroom } from "../lib/useClassroom";
 import { usePython } from "../lib/usePython";
@@ -36,8 +38,8 @@ function stateWords(seat: Seat): string {
 
 function TeacherDesk({ code, token }: { code: string; token: string }) {
   const hello = useMemo<Hello>(() => ({ role: "teacher", token }), [token]);
-  const { classroom, send } = useClassroom(code, hello);
-  const { room } = classroom;
+  const { classroom, send, dismissNotice } = useClassroom(code, hello);
+  const { room, steps } = classroom;
 
   const [source, setSource] = useState("");
   const sourceRef = useRef(source);
@@ -93,10 +95,51 @@ function TeacherDesk({ code, token }: { code: string; token: string }) {
     }
   };
 
+  // The lesson editor replaces the desk while open. A save is pending until the
+  // server broadcasts the new lesson (the editor closes) or refuses it (a notice).
+  const [editing, setEditing] = useState(false);
+  const [pendingSince, setPendingSince] = useState<number | null>(null);
+  const saveLesson = (drafts: StepDraft[]) => {
+    dismissNotice();
+    setPendingSince(classroom.lessonSeq);
+    send({ type: "set_steps", steps: drafts });
+  };
+  useEffect(() => {
+    if (pendingSince === null) return;
+    if (classroom.lessonSeq > pendingSince) {
+      setPendingSince(null);
+      setEditing(false);
+    } else if (classroom.notice) {
+      setPendingSince(null);
+    }
+  }, [pendingSince, classroom.lessonSeq, classroom.notice]);
+
   if (classroom.phase === "closed" && classroom.closeReason) {
     return <RoomClosed reason={classroom.closeReason} detail={classroom.closeDetail} code={code} />;
   }
   if (!room) return <RoomLoading />;
+
+  if (editing) {
+    return (
+      <>
+        <TopBar classroom={classroom}>
+          <span className="bar__who">Teacher’s desk</span>
+        </TopBar>
+        <main className="lesson-page">
+          <LessonEditor
+            steps={steps}
+            saving={pendingSince !== null}
+            notice={classroom.notice}
+            onSave={saveLesson}
+            onCancel={() => {
+              dismissNotice();
+              setEditing(false);
+            }}
+          />
+        </main>
+      </>
+    );
+  }
 
   return (
     <>
@@ -155,6 +198,54 @@ function TeacherDesk({ code, token }: { code: string; token: string }) {
             </div>
           </div>
 
+          <section className="desk__lesson" aria-label="Lesson">
+            <div className="pane__head">
+              <h2 className="pane__title">Lesson</h2>
+              <div className="pane__tools">
+                {steps.length > 0 && (
+                  <span className="pane__note">
+                    {steps.length} {steps.length === 1 ? "step" : "steps"}
+                  </span>
+                )}
+                <button type="button" className="btn" onClick={() => setEditing(true)}>
+                  {steps.length > 0 ? "Edit lesson" : "Write the lesson"}
+                </button>
+              </div>
+            </div>
+            {steps.length === 0 ? (
+              <p className="desk__hint">
+                No steps yet. A step gives students a task and the output it must print; their passes show on
+                the map.
+              </p>
+            ) : (
+              <ol className="steps steps--desk">
+                {steps.map((step, index) => {
+                  const isNow = classroom.currentStep === step.id;
+                  const count = classroom.seats.filter((seat) => seat.passed?.includes(step.id)).length;
+                  return (
+                    <li key={step.id}>
+                      <button
+                        type="button"
+                        className={classes("step", isNow && "step--now")}
+                        aria-pressed={isNow}
+                        aria-label={`Step ${index + 1}: ${step.title}, passed by ${count} of ${classroom.seats.length} seated`}
+                        title={isNow ? "The class is on this step. Click to clear." : "Point the class at this step"}
+                        onClick={() => send({ type: "set_current_step", step: isNow ? null : step.id })}
+                      >
+                        <span className="step__num">{index + 1}</span>
+                        <span className="step__title">{step.title}</span>
+                        {isNow && <span className="step__now">Now</span>}
+                        <span className="step__count">
+                          {count}/{classroom.seats.length}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ol>
+            )}
+          </section>
+
           <div className="desk__map">
             <SeatMap
               rows={room.rows}
@@ -163,6 +254,7 @@ function TeacherDesk({ code, token }: { code: string; token: string }) {
               mode="watch"
               current={isWatching ? watchedSeat : null}
               onSelect={(seat) => setParams(seat === watchedSeat ? {} : { seat: String(seat) })}
+              stepCount={steps.length}
             />
           </div>
 
@@ -174,6 +266,22 @@ function TeacherDesk({ code, token }: { code: string; token: string }) {
                     {watched.name}, seat <span className="mono">{seatLabel(watchedSeat, room.cols)}</span>
                   </h2>
                   <div className="pane__tools">
+                    {steps.length > 0 && (
+                      <ol
+                        className="marks"
+                        aria-label={`${watched.passed?.length ?? 0} of ${steps.length} steps passed`}
+                      >
+                        {steps.map((step, index) => (
+                          <li
+                            key={step.id}
+                            className={watched.passed?.includes(step.id) ? "mark mark--passed" : "mark"}
+                            title={step.title}
+                          >
+                            {index + 1}
+                          </li>
+                        ))}
+                      </ol>
+                    )}
                     <span className="status" role="status">
                       {stateWords(watched)}
                     </span>

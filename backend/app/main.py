@@ -4,9 +4,9 @@ A small REST API opens a class; after that everyone in the class holds one
 WebSocket. The first message on a socket is a "hello" that says who is
 connecting, so secrets never travel in a URL.
 
-Messages a student sends:   take_seat, leave_seat, source, run
-Messages the teacher sends: source, watch, free_seat
-Messages the server sends:  welcome, seats, you, teacher_source, student_source, error
+Messages a student sends:   take_seat, leave_seat, source, run, check
+Messages the teacher sends: source, watch, free_seat, set_steps, set_current_step
+Messages the server sends:  welcome, seats, you, teacher_source, student_source, steps, check, error
 """
 
 from __future__ import annotations
@@ -70,6 +70,9 @@ class Hub:
     def students(self, code: str) -> list[Connection]:
         return [c for c in self._rooms.get(code, ()) if not c.is_teacher]
 
+    def everyone(self, code: str) -> list[Connection]:
+        return list(self._rooms.get(code, ()))
+
     def for_student(self, code: str, student: Student) -> Connection | None:
         for conn in self._rooms.get(code, ()):
             if conn.student is student:
@@ -131,12 +134,17 @@ async def broadcast_seats(room: Classroom) -> None:
     await broadcast(hub.students(room.code), {"type": "seats", "seats": room.seats(for_teacher=False)})
 
 
+async def broadcast_lesson(room: Classroom) -> None:
+    await broadcast(hub.everyone(room.code), {"type": "steps", **room.lesson()})
+
+
 def welcome(room: Classroom, conn: Connection) -> dict:
     message = {
         "type": "welcome",
         "class": room.info(),
         "seats": room.seats(for_teacher=conn.is_teacher),
         "teacherSource": room.teacher_source,
+        **room.lesson(),
     }
     student = conn.student
     if student is None:
@@ -147,6 +155,7 @@ def welcome(room: Classroom, conn: Connection) -> dict:
             "name": student.name,
             "seat": student.seat,
             "source": student.source,
+            "passed": room.passed_steps(student),
         }
     return message
 
@@ -206,6 +215,12 @@ async def handle_student(room: Classroom, conn: Connection, message: dict) -> No
         student.last_run = status
         await broadcast_seats_to_teachers(room)
 
+    elif kind == "check":
+        step = room.step(message.get("step"))
+        passed = room.check(student, step, message.get("status"), message.get("output"))
+        await conn.send({"type": "check", "step": step.id, "passed": passed})
+        await broadcast_seats_to_teachers(room)
+
 
 async def handle_teacher(room: Classroom, conn: Connection, message: dict) -> None:
     kind = message.get("type")
@@ -238,6 +253,19 @@ async def handle_teacher(room: Classroom, conn: Connection, message: dict) -> No
         if target is not None:
             await target.send({"type": "you", "seat": None})
         await broadcast_seats(room)
+
+    elif kind == "set_steps":
+        room.set_steps(message.get("steps"))
+        await broadcast_lesson(room)
+        # A changed check takes its passes with it, so each student is told where they stand.
+        for conn_ in hub.students(room.code):
+            assert conn_.student is not None
+            await conn_.send({"type": "you", "passed": room.passed_steps(conn_.student)})
+        await broadcast_seats_to_teachers(room)
+
+    elif kind == "set_current_step":
+        room.set_current_step(message.get("step"))
+        await broadcast_lesson(room)
 
 
 async def receive(ws: WebSocket) -> dict | None:
@@ -322,4 +350,6 @@ async def classroom_socket(ws: WebSocket, code: str) -> None:
         student = conn.student
         if student is not None and hub.for_student(room.code, student) is None:
             student.online = False
-            await broadcast_seats(room)
+            # Shielded so that cancelling this socket's task (a server shutting down, or the
+            # test client right after a disconnect) still lets the teacher see the seat go dark.
+            await asyncio.shield(broadcast_seats(room))

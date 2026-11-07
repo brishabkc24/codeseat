@@ -4,10 +4,11 @@ import { CodeEditor } from "../components/CodeEditor";
 import { RoomClosed, RoomLoading } from "../components/RoomStates";
 import { RunPanel } from "../components/RunPanel";
 import { SeatMap } from "../components/SeatMap";
+import { StepsPane, type Verdict } from "../components/StepsPane";
 import { TopBar } from "../components/TopBar";
 import { type StudentIdentity, loadStudent, saveStudent } from "../lib/api";
-import { type Hello, seatLabel } from "../lib/protocol";
-import { useClassroom } from "../lib/useClassroom";
+import { type Hello, type RunResult, type Step, seatLabel } from "../lib/protocol";
+import { type Classroom, useClassroom } from "../lib/useClassroom";
 import { usePython } from "../lib/usePython";
 import { useThrottledSend } from "../lib/useThrottledSend";
 
@@ -26,13 +27,16 @@ export function StudentRoom() {
   return <StudentDesk code={code} identity={identity} />;
 }
 
+/** What the student's own check run printed, kept to explain the server's verdict. */
+type CheckRun = { step: string; result: RunResult; output: string };
+
 function StudentDesk({ code, identity }: { code: string; identity: StudentIdentity }) {
   const hello = useMemo<Hello>(
     () => ({ role: "student", name: identity.name, studentId: identity.id }),
     [identity],
   );
   const { classroom, send, dismissNotice } = useClassroom(code, hello);
-  const { room, you } = classroom;
+  const { room, you, steps } = classroom;
 
   const [source, setSource] = useState("");
   const sourceRef = useRef(source);
@@ -68,8 +72,41 @@ function StudentDesk({ code, identity }: { code: string; identity: StudentIdenti
     setChoosing(false);
   }, [mySeat]);
 
-  const python = usePython((result) => send({ type: "run", status: result }));
+  // A check is a run with the step's input; the server judges what it printed.
+  const [checking, setChecking] = useState<Step | null>(null);
+  const checkingRef = useRef<Step | null>(null);
+  const [checkRun, setCheckRun] = useState<CheckRun | null>(null);
+  const python = usePython((result, chunks) => {
+    const step = checkingRef.current;
+    checkingRef.current = null;
+    setChecking(null);
+    if (!step) {
+      send({ type: "run", status: result });
+      return;
+    }
+    const output = chunks
+      .filter((chunk) => chunk.stream === "stdout")
+      .map((chunk) => chunk.text)
+      .join("");
+    setCheckRun({ step: step.id, result, output });
+    send({ type: "check", step: step.id, status: result, output });
+  });
   const runNow = () => python.run(sourceRef.current);
+  const checkStep = (step: Step) => {
+    checkingRef.current = step;
+    setChecking(step);
+    python.run(sourceRef.current, { stdin: step.input });
+  };
+  const stopNow = () => {
+    checkingRef.current = null;
+    setChecking(null);
+    python.stop();
+  };
+
+  // Which step is open: the one I picked, else where the teacher points, else my next one.
+  const [picked, setPicked] = useState<string | null>(null);
+  const selected = chooseStep(steps, picked, classroom);
+  const verdict = verdictFor(selected, classroom, checkRun);
 
   if (classroom.phase === "closed" && classroom.closeReason) {
     return <RoomClosed reason={classroom.closeReason} detail={classroom.closeDetail} code={code} />;
@@ -121,6 +158,25 @@ function StudentDesk({ code, identity }: { code: string; identity: StudentIdenti
     );
   }
 
+  const teacherPane = (
+    <section className="pane" aria-label="Teacher’s code">
+      <div className="pane__head">
+        <h2 className="pane__title">Teacher’s code</h2>
+        <span className={classroom.phase === "open" ? "status status--live" : "status"} role="status">
+          {classroom.phase === "open" ? "Live" : "Paused"}
+        </span>
+      </div>
+      <div className="pane__body">
+        <CodeEditor
+          value={classroom.teacherSource}
+          label="Teacher’s code, read only"
+          readOnly
+          placeholder="Your teacher has not typed anything yet."
+        />
+      </div>
+    </section>
+  );
+
   return (
     <>
       <TopBar classroom={classroom}>
@@ -132,22 +188,24 @@ function StudentDesk({ code, identity }: { code: string; identity: StudentIdenti
         </button>
       </TopBar>
       <main className="work">
-        <section className="pane" aria-label="Teacher’s code">
-          <div className="pane__head">
-            <h2 className="pane__title">Teacher’s code</h2>
-            <span className={classroom.phase === "open" ? "status status--live" : "status"} role="status">
-              {classroom.phase === "open" ? "Live" : "Paused"}
-            </span>
-          </div>
-          <div className="pane__body">
-            <CodeEditor
-              value={classroom.teacherSource}
-              label="Teacher’s code, read only"
-              readOnly
-              placeholder="Your teacher has not typed anything yet."
+        {selected ? (
+          <div className="column">
+            <StepsPane
+              steps={steps}
+              currentStep={classroom.currentStep}
+              passed={you.passed}
+              selected={selected}
+              onSelect={setPicked}
+              onCheck={checkStep}
+              checking={checking?.id ?? null}
+              canCheck={python.phase === "ready"}
+              verdict={verdict}
             />
+            {teacherPane}
           </div>
-        </section>
+        ) : (
+          teacherPane
+        )}
 
         <section className="pane pane--split" aria-label="Your code">
           <div className="pane__head">
@@ -163,9 +221,28 @@ function StudentDesk({ code, identity }: { code: string; identity: StudentIdenti
               placeholder="Type your Python here."
             />
           </div>
-          <RunPanel python={python} onRun={runNow} />
+          <RunPanel python={{ ...python, stop: stopNow }} onRun={runNow} />
         </section>
       </main>
     </>
   );
+}
+
+function chooseStep(steps: Step[], picked: string | null, classroom: Classroom): Step | null {
+  if (steps.length === 0) return null;
+  const passed = classroom.you?.passed ?? [];
+  return (
+    steps.find((step) => step.id === picked) ??
+    steps.find((step) => step.id === classroom.currentStep) ??
+    steps.find((step) => !passed.includes(step.id)) ??
+    steps[0]
+  );
+}
+
+/** The verdict to show for the open step: the server's answer to my latest check of it. */
+function verdictFor(selected: Step | null, classroom: Classroom, checkRun: CheckRun | null): Verdict | null {
+  const answer = classroom.lastCheck;
+  if (!selected || !answer || answer.step !== selected.id) return null;
+  const run = checkRun?.step === selected.id ? checkRun : null;
+  return { passed: answer.passed, result: run?.result ?? "ok", output: run?.output ?? "" };
 }

@@ -15,6 +15,8 @@ type Props = {
   onSelect?: (seat: number) => void;
   /** Smaller desks, for the preview on the start form. */
   compact?: boolean;
+  /** Teacher only: how many lesson steps there are, so each seat can show its passes. */
+  stepCount?: number;
 };
 
 function runWord(seat: Seat): { text: string; tone: "" | "error" | "ok" } {
@@ -24,7 +26,16 @@ function runWord(seat: Seat): { text: string; tone: "" | "error" | "ok" } {
   return { text: "Not run yet", tone: "" };
 }
 
-export function SeatMap({ rows, cols, seats, mode, current = null, onSelect, compact = false }: Props) {
+export function SeatMap({
+  rows,
+  cols,
+  seats,
+  mode,
+  current = null,
+  onSelect,
+  compact = false,
+  stepCount = 0,
+}: Props) {
   const bySeat = new Map(seats.map((seat) => [seat.seat, seat]));
   const style = { "--cols": cols } as CSSProperties;
 
@@ -56,6 +67,8 @@ export function SeatMap({ rows, cols, seats, mode, current = null, onSelect, com
 
           if (mode === "watch" && occupant) {
             const state = runWord(occupant);
+            const passed = occupant.passed?.length ?? 0;
+            const progress = stepCount > 0 ? `, ${passed} of ${stepCount} steps passed` : "";
             return (
               <li key={index}>
                 <button
@@ -66,7 +79,7 @@ export function SeatMap({ rows, cols, seats, mode, current = null, onSelect, com
                     occupant.online ? "" : "seat--offline",
                   ].join(" ")}
                   aria-pressed={isCurrent}
-                  aria-label={`${occupant.name}, seat ${label}, ${state.text.toLowerCase()}`}
+                  aria-label={`${occupant.name}, seat ${label}, ${state.text.toLowerCase()}${progress}`}
                   onClick={() => onSelect?.(index)}
                 >
                   <span className="seat__label">{label}</span>
@@ -74,6 +87,11 @@ export function SeatMap({ rows, cols, seats, mode, current = null, onSelect, com
                   <span className={state.tone ? `seat__state seat__state--${state.tone}` : "seat__state"}>
                     {state.text}
                   </span>
+                  {stepCount > 0 && (
+                    <span className={passed === stepCount ? "seat__steps seat__steps--all" : "seat__steps"}>
+                      {passed}/{stepCount}
+                    </span>
+                  )}
                 </button>
               </li>
             );
