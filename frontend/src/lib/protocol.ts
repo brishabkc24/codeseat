@@ -2,6 +2,11 @@
 
 export type ClassInfo = { code: string; title: string; rows: number; cols: number };
 
+export type Teacher = { id: string; name: string; email: string };
+
+/** A class as listed on the teacher's classes page. Times are seconds since 1970. */
+export type ClassSummary = ClassInfo & { students: number; steps: number; createdAt: number; updatedAt: number };
+
 export type RunResult = "ok" | "error";
 
 /** One task of the lesson. It passes when a program prints the expected output. */
@@ -44,9 +49,8 @@ export type ServerMessage =
   | { type: "check"; step: string; passed: boolean }
   | { type: "error"; message: string };
 
-export type Hello =
-  | { role: "teacher"; token: string }
-  | { role: "student"; name: string; studentId: string | null };
+/** The teacher is known by the session cookie the browser sends with the connection. */
+export type Hello = { role: "teacher" } | { role: "student"; name: string; studentId: string | null };
 
 /** Seats are numbered row by row from the front; row A is nearest the teacher. */
 export function seatLabel(seat: number, cols: number): string {

@@ -1,8 +1,11 @@
 """CodeSeat server.
 
-A small REST API opens a class; after that everyone in the class holds one
-WebSocket. The first message on a socket is a "hello" that says who is
-connecting, so secrets never travel in a URL.
+Teachers have accounts and keep their classes; students need only a class code
+and a name. A small REST API signs teachers in and manages their classes. After
+that everyone in a class holds one WebSocket. The first message on a socket is
+a "hello" that says who is connecting: a teacher is known by the session cookie
+the browser sends with the connection, a student by a secret id. Secrets never
+travel in a URL.
 
 Messages a student sends:   take_seat, leave_seat, source, run, check
 Messages the teacher sends: source, watch, free_seat, set_steps, set_current_step
@@ -12,21 +15,44 @@ Messages the server sends:  welcome, seats, you, teacher_source, student_source,
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 import secrets
+import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
-from .rooms import RUN_STATES, Classroom, ClassroomStore, RoomError, Student
+from .accounts import (
+    MAX_TEACHER_NAME,
+    SESSION_SECONDS,
+    AccountError,
+    LoginBrake,
+    check_password,
+    clean_email,
+    clean_password,
+    hash_password,
+    new_session_token,
+    session_key,
+)
+from .rooms import Classroom, ClassroomStore, RoomError, Student, clean_text
+from .storage import EmailTaken, Storage, TeacherRecord
 
 HELLO_TIMEOUT_SECONDS = 10
+SAVE_EVERY_SECONDS = 2
+SESSION_COOKIE = "codeseat_session"
+DEFAULT_DATABASE = Path(__file__).resolve().parent.parent / "data" / "codeseat.db"
 
 # WebSocket close codes. The frontend turns these into messages for the user.
 CLOSE_BAD_HELLO = 4400
 CLOSE_NOT_TEACHER = 4401
 CLOSE_NO_CLASS = 4404
 CLOSE_REPLACED = 4409
+
+log = logging.getLogger("codeseat")
 
 
 @dataclass(eq=False)
@@ -80,12 +106,144 @@ class Hub:
         return None
 
 
-app = FastAPI(title="CodeSeat")
-store = ClassroomStore()
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    keeper = asyncio.create_task(keep_saving())
+    try:
+        yield
+    finally:
+        keeper.cancel()
+        store.flush()
+
+
+async def keep_saving() -> None:
+    """Copies changed classrooms to storage every few seconds and drops idle ones."""
+    while True:
+        await asyncio.sleep(SAVE_EVERY_SECONDS)
+        try:
+            store.flush()
+            store.unload_idle(keep=lambda room: bool(hub.everyone(room.code)))
+        except Exception:
+            log.exception("Saving classrooms failed; will try again")
+
+
+app = FastAPI(title="CodeSeat", lifespan=lifespan)
+store = ClassroomStore(Storage(os.environ.get("CODESEAT_DATABASE", DEFAULT_DATABASE)))
 hub = Hub()
+brake = LoginBrake()
 
 
-# ---------------------------------------------------------------- REST
+# ---------------------------------------------------------------- teachers
+
+
+class SignUp(BaseModel):
+    name: str
+    email: str
+    password: str
+
+
+class LogIn(BaseModel):
+    email: str
+    password: str
+
+
+def public(teacher: TeacherRecord) -> dict:
+    return {"id": teacher.id, "name": teacher.name, "email": teacher.email}
+
+
+def session_teacher(request: Request) -> TeacherRecord | None:
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return None
+    return store.storage.teacher_for_session(session_key(token), time.time())
+
+
+def require_teacher(request: Request) -> TeacherRecord:
+    teacher = session_teacher(request)
+    if teacher is None:
+        raise HTTPException(status_code=401, detail="Log in to do this.")
+    return teacher
+
+
+def start_session(teacher: TeacherRecord, request: Request, response: Response) -> None:
+    token = new_session_token()
+    now = time.time()
+    store.storage.add_session(session_key(token), teacher.id, now, now + SESSION_SECONDS)
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        max_age=SESSION_SECONDS,
+        path="/",
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+    )
+
+
+@app.post("/api/teachers", status_code=201)
+def sign_up(body: SignUp, request: Request, response: Response) -> dict:
+    try:
+        name = clean_text(body.name, MAX_TEACHER_NAME, "Your name")
+        email = clean_email(body.email)
+        password = clean_password(body.password)
+    except (RoomError, AccountError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    teacher = TeacherRecord(
+        id=secrets.token_urlsafe(12),
+        name=name,
+        email=email,
+        password_hash=hash_password(password),
+        created_at=time.time(),
+    )
+    try:
+        store.storage.add_teacher(teacher)
+    except EmailTaken as error:
+        raise HTTPException(
+            status_code=409, detail="An account with this email already exists. Log in instead."
+        ) from error
+    start_session(teacher, request, response)
+    return {"teacher": public(teacher)}
+
+
+# Checked when the email is unknown, so an unknown and a wrong password take the same time.
+NOBODY_HASH = hash_password(secrets.token_urlsafe(16))
+
+
+@app.post("/api/session")
+def log_in(body: LogIn, request: Request, response: Response) -> dict:
+    email = body.email.strip().lower()
+    wait = brake.wait(email)
+    if wait:
+        minutes = max(1, -(-wait // 60))
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many wrong passwords. Try again in {minutes} minute{'s' if minutes > 1 else ''}.",
+        )
+    teacher = store.storage.teacher_by_email(email)
+    if not check_password(body.password, teacher.password_hash if teacher else NOBODY_HASH) or teacher is None:
+        brake.failed(email)
+        raise HTTPException(status_code=401, detail="Wrong email or password.")
+    brake.succeeded(email)
+    start_session(teacher, request, response)
+    return {"teacher": public(teacher)}
+
+
+@app.get("/api/session")
+def who_am_i(request: Request) -> dict:
+    """Who this browser is signed in as; null is an answer, not an error."""
+    teacher = session_teacher(request)
+    return {"teacher": public(teacher) if teacher else None}
+
+
+@app.delete("/api/session", status_code=204)
+def log_out(request: Request, response: Response) -> None:
+    token = request.cookies.get(SESSION_COOKIE)
+    if token:
+        store.storage.delete_session(session_key(token))
+    response.delete_cookie(SESSION_COOKIE, path="/")
+
+
+# ---------------------------------------------------------------- classes
 
 
 class NewClass(BaseModel):
@@ -99,13 +257,18 @@ def health() -> dict:
     return {"ok": True}
 
 
+@app.get("/api/classes")
+def my_classes(teacher: TeacherRecord = Depends(require_teacher)) -> dict:
+    return {"classes": store.summaries_for(teacher.id)}
+
+
 @app.post("/api/classes", status_code=201)
-def create_class(body: NewClass) -> dict:
+def create_class(body: NewClass, teacher: TeacherRecord = Depends(require_teacher)) -> dict:
     try:
-        room = store.create(body.title, body.rows, body.cols)
+        room = store.create(teacher.id, body.title, body.rows, body.cols)
     except RoomError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-    return {**room.info(), "teacherToken": room.teacher_token}
+    return room.info()
 
 
 @app.get("/api/classes/{code}")
@@ -114,6 +277,18 @@ def get_class(code: str) -> dict:
     if room is None:
         raise HTTPException(status_code=404, detail="No class has that code. Check it with your teacher.")
     return {**room.info(), "seatsTaken": len(room.seats(for_teacher=False))}
+
+
+@app.delete("/api/classes/{code}", status_code=204)
+async def delete_class(code: str, teacher: TeacherRecord = Depends(require_teacher)) -> None:
+    room = store.get(code)
+    if room is None:
+        raise HTTPException(status_code=404, detail="No class has that code.")
+    if room.teacher_id != teacher.id:
+        raise HTTPException(status_code=403, detail="This class belongs to another teacher.")
+    store.delete(room.code)
+    for conn in hub.everyone(room.code):
+        await close_quietly(conn.ws, CLOSE_NO_CLASS, "The teacher has deleted this class.")
 
 
 # ---------------------------------------------------------------- WebSocket
@@ -168,11 +343,9 @@ def stop_watching(room: Classroom, seat: int) -> None:
 
 
 def vacate(room: Classroom, student: Student) -> None:
-    seat = student.seat
-    if seat is None:
-        return
-    student.seat = None
-    stop_watching(room, seat)
+    seat = room.leave_seat(student)
+    if seat is not None:
+        stop_watching(room, seat)
 
 
 def as_seat(value: object) -> int | None:
@@ -209,10 +382,7 @@ async def handle_student(room: Classroom, conn: Connection, message: dict) -> No
             )
 
     elif kind == "run":
-        status = message.get("status")
-        if status not in RUN_STATES:
-            raise RoomError("Unknown run result.")
-        student.last_run = status
+        room.record_run(student, message.get("status"))
         await broadcast_seats_to_teachers(room)
 
     elif kind == "check":
@@ -302,9 +472,10 @@ async def classroom_socket(ws: WebSocket, code: str) -> None:
 
     replaced: Connection | None = None
     if hello.get("role") == "teacher":
-        token = hello.get("token")
-        if not isinstance(token, str) or not secrets.compare_digest(token, room.teacher_token):
-            await close_quietly(ws, CLOSE_NOT_TEACHER, "This browser is not the teacher of this class.")
+        token = ws.cookies.get(SESSION_COOKIE)
+        teacher = store.storage.teacher_for_session(session_key(token), time.time()) if token else None
+        if teacher is None or teacher.id != room.teacher_id:
+            await close_quietly(ws, CLOSE_NOT_TEACHER, "Only the teacher of this class can open its desk.")
             return
         conn = Connection(ws)
     elif hello.get("role") == "student":
@@ -323,6 +494,7 @@ async def classroom_socket(ws: WebSocket, code: str) -> None:
         await close_quietly(ws, CLOSE_BAD_HELLO, "Unknown role.")
         return
 
+    room.touch()
     hub.add(room.code, conn)
     if replaced is not None:
         await close_quietly(replaced.ws, CLOSE_REPLACED, "This class was opened in another tab.")
@@ -336,6 +508,7 @@ async def classroom_socket(ws: WebSocket, code: str) -> None:
             message = await receive(ws)
             if message is None:
                 continue
+            room.touch()
             try:
                 if conn.is_teacher:
                     await handle_teacher(room, conn, message)

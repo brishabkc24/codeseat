@@ -2,6 +2,8 @@
 
 Nothing in this module knows about HTTP or WebSockets, so the classroom rules
 (who may sit where, what each role is allowed to see) can be tested on their own.
+A classroom belongs to a teacher and is copied to storage whenever it has
+changed, so it outlives the server process; see storage.py.
 """
 
 from __future__ import annotations
@@ -9,6 +11,8 @@ from __future__ import annotations
 import secrets
 import time
 from dataclasses import dataclass, field
+
+from .storage import ClassRecord, Storage
 
 # No 0/O or 1/I/L, so a code read aloud or off a projector is hard to mistype.
 CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
@@ -25,7 +29,7 @@ MAX_INSTRUCTIONS = 2_000
 MAX_EXPECTED = 5_000
 MAX_INPUT = 2_000
 MAX_CHECK_OUTPUT = 20_000
-ROOM_TTL_SECONDS = 12 * 60 * 60
+IDLE_SECONDS = 2 * 60 * 60  # a classroom nobody has touched for this long leaves memory
 RUN_STATES = ("ok", "error")
 
 
@@ -89,6 +93,16 @@ class Step:
             "input": self.input,
         }
 
+    @classmethod
+    def from_info(cls, info: dict) -> Step:
+        return cls(
+            id=info["id"],
+            title=info["title"],
+            instructions=info.get("instructions", ""),
+            expected_output=info.get("expectedOutput", ""),
+            input=info.get("input", ""),
+        )
+
     def same_check(self, other: Step) -> bool:
         return self.expected_output == other.expected_output and self.input == other.input
 
@@ -110,12 +124,14 @@ class Classroom:
     title: str
     rows: int
     cols: int
-    teacher_token: str
+    teacher_id: str
     teacher_source: str = ""
     created_at: float = field(default_factory=time.time)
     students: dict[str, Student] = field(default_factory=dict)
     steps: list[Step] = field(default_factory=list)
     current_step: str | None = None  # the step the teacher has pointed the class at
+    last_active: float = field(default_factory=time.time)
+    dirty: bool = False  # changed since it was last copied to storage
 
     @property
     def seat_count(self) -> int:
@@ -126,6 +142,64 @@ class Classroom:
 
     def lesson(self) -> dict:
         return {"steps": [step.info() for step in self.steps], "currentStep": self.current_step}
+
+    def touch(self) -> None:
+        self.last_active = time.time()
+
+    def student_at(self, seat: int) -> Student | None:
+        for student in self.students.values():
+            if student.seat == seat:
+                return student
+        return None
+
+    def join(self, student_id: object, name: object) -> Student:
+        """Return the student for this browser, creating one on a first visit."""
+        clean = clean_text(name, MAX_NAME, "Your name")
+        student = self.students.get(student_id) if isinstance(student_id, str) else None
+        if student is None:
+            student = Student(id=secrets.token_urlsafe(16), name=clean)
+            self.students[student.id] = student
+            self.dirty = True
+        elif student.name != clean:
+            student.name = clean
+            self.dirty = True
+        return student
+
+    def take_seat(self, student: Student, seat: object) -> None:
+        if isinstance(seat, bool) or not isinstance(seat, int) or not 0 <= seat < self.seat_count:
+            raise RoomError("That seat does not exist.")
+        holder = self.student_at(seat)
+        if holder is not None and holder is not student:
+            raise RoomError("Someone just took that seat. Pick another one.")
+        if student.seat != seat:
+            student.seat = seat
+            self.dirty = True
+
+    def leave_seat(self, student: Student) -> int | None:
+        """Empties the student's seat and returns which one it was."""
+        seat = student.seat
+        if seat is not None:
+            student.seat = None
+            self.dirty = True
+        return seat
+
+    def set_source(self, student: Student, text: object) -> None:
+        source = check_source(text)
+        if student.source != source:
+            student.source = source
+            self.dirty = True
+
+    def set_teacher_source(self, text: object) -> None:
+        source = check_source(text)
+        if self.teacher_source != source:
+            self.teacher_source = source
+            self.dirty = True
+
+    def record_run(self, student: Student, status: object) -> None:
+        if status not in RUN_STATES:
+            raise RoomError("Unknown run result.")
+        student.last_run = status
+        self.dirty = True
 
     def step(self, step_id: object) -> Step:
         for step in self.steps:
@@ -173,9 +247,13 @@ class Classroom:
         self.steps = steps
         if self.current_step not in taken:
             self.current_step = None
+        self.dirty = True
 
     def set_current_step(self, step_id: object) -> None:
-        self.current_step = None if step_id is None else self.step(step_id).id
+        current = None if step_id is None else self.step(step_id).id
+        if current != self.current_step:
+            self.current_step = current
+            self.dirty = True
 
     def check(self, student: Student, step: Step, status: object, output: object) -> bool:
         """Judge a run the student made for a step. A pass, once earned, stays."""
@@ -183,42 +261,11 @@ class Classroom:
             raise RoomError("Unknown run result.")
         if not isinstance(output, str):
             raise RoomError("Output must be text.")
-        student.last_run = status
+        self.record_run(student, status)
         passed = status == "ok" and outputs_match(step.expected_output, output[:MAX_CHECK_OUTPUT])
         if passed:
             student.passed.add(step.id)
         return passed
-
-    def student_at(self, seat: int) -> Student | None:
-        for student in self.students.values():
-            if student.seat == seat:
-                return student
-        return None
-
-    def join(self, student_id: object, name: object) -> Student:
-        """Return the student for this browser, creating one on a first visit."""
-        clean = clean_text(name, MAX_NAME, "Your name")
-        student = self.students.get(student_id) if isinstance(student_id, str) else None
-        if student is None:
-            student = Student(id=secrets.token_urlsafe(16), name=clean)
-            self.students[student.id] = student
-        else:
-            student.name = clean
-        return student
-
-    def take_seat(self, student: Student, seat: object) -> None:
-        if isinstance(seat, bool) or not isinstance(seat, int) or not 0 <= seat < self.seat_count:
-            raise RoomError("That seat does not exist.")
-        holder = self.student_at(seat)
-        if holder is not None and holder is not student:
-            raise RoomError("Someone just took that seat. Pick another one.")
-        student.seat = seat
-
-    def set_source(self, student: Student, text: object) -> None:
-        student.source = check_source(text)
-
-    def set_teacher_source(self, text: object) -> None:
-        self.teacher_source = check_source(text)
 
     def seats(self, for_teacher: bool) -> list[dict]:
         """Occupied seats. Students see who sits where; only the teacher sees run results."""
@@ -238,6 +285,64 @@ class Classroom:
         """Names of students who are connected but have not picked a seat yet."""
         return sorted(s.name for s in self.students.values() if s.online and s.seat is None)
 
+    # ---------------------------------------------------------------- storage
+
+    def state(self) -> dict:
+        """Everything worth keeping between server runs. Who is online is not."""
+        return {
+            "teacherSource": self.teacher_source,
+            "steps": [step.info() for step in self.steps],
+            "currentStep": self.current_step,
+            "students": [
+                {
+                    "id": student.id,
+                    "name": student.name,
+                    "seat": student.seat,
+                    "source": student.source,
+                    "lastRun": student.last_run,
+                    "passed": self.passed_steps(student),
+                }
+                for student in self.students.values()
+            ],
+        }
+
+    def record(self) -> ClassRecord:
+        return ClassRecord(
+            code=self.code,
+            teacher_id=self.teacher_id,
+            title=self.title,
+            rows=self.rows,
+            cols=self.cols,
+            created_at=self.created_at,
+            updated_at=time.time(),
+            state=self.state(),
+        )
+
+    @classmethod
+    def from_record(cls, record: ClassRecord) -> Classroom:
+        state = record.state
+        room = cls(
+            code=record.code,
+            title=record.title,
+            rows=record.rows,
+            cols=record.cols,
+            teacher_id=record.teacher_id,
+            teacher_source=state.get("teacherSource", ""),
+            created_at=record.created_at,
+        )
+        room.steps = [Step.from_info(info) for info in state.get("steps", [])]
+        room.current_step = state.get("currentStep")
+        for info in state.get("students", []):
+            room.students[info["id"]] = Student(
+                id=info["id"],
+                name=info["name"],
+                seat=info.get("seat"),
+                source=info.get("source", ""),
+                last_run=info.get("lastRun"),
+                passed=set(info.get("passed", [])),
+            )
+        return room
+
 
 def check_source(text: object) -> str:
     if not isinstance(text, str):
@@ -255,40 +360,89 @@ def new_id(taken: set[str]) -> str:
 
 
 class ClassroomStore:
-    """All live classrooms, kept in memory. A server restart ends every class."""
+    """Live classrooms: loaded from storage when first needed, copied back as they change."""
 
-    def __init__(self) -> None:
+    def __init__(self, storage: Storage) -> None:
+        self.storage = storage
         self._rooms: dict[str, Classroom] = {}
 
-    def create(self, title: object, rows: int, cols: int) -> Classroom:
+    def create(self, teacher_id: str, title: object, rows: int, cols: int) -> Classroom:
         clean = clean_text(title, MAX_TITLE, "The class name")
         if not 1 <= rows <= MAX_ROWS or not 1 <= cols <= MAX_COLS:
             raise RoomError(f"A classroom can have up to {MAX_ROWS} rows and {MAX_COLS} seats per row.")
-        self.prune()
-        code = self._new_code()
-        room = Classroom(
-            code=code,
-            title=clean,
-            rows=rows,
-            cols=cols,
-            teacher_token=secrets.token_urlsafe(24),
-        )
-        self._rooms[code] = room
+        room = Classroom(code=self._new_code(), title=clean, rows=rows, cols=cols, teacher_id=teacher_id)
+        self._rooms[room.code] = room
+        self.storage.save_class(room.record())
         return room
 
     def get(self, code: object) -> Classroom | None:
         if not isinstance(code, str):
             return None
-        return self._rooms.get(code.strip().upper())
+        key = code.strip().upper()
+        room = self._rooms.get(key)
+        if room is None:
+            record = self.storage.load_class(key)
+            if record is None:
+                return None
+            room = Classroom.from_record(record)
+            self._rooms[key] = room
+        return room
 
-    def prune(self, now: float | None = None) -> None:
-        """Drop classrooms older than the time limit so memory does not grow forever."""
-        cutoff = (time.time() if now is None else now) - ROOM_TTL_SECONDS
-        for code in [c for c, room in self._rooms.items() if room.created_at < cutoff]:
+    def delete(self, code: str) -> None:
+        self._rooms.pop(code, None)
+        self.storage.delete_class(code)
+
+    def summaries_for(self, teacher_id: str) -> list[dict]:
+        """The teacher's classes, newest first, with live counts for the ones in memory."""
+        summaries = []
+        for record in self.storage.classes_for_teacher(teacher_id):
+            live = self._rooms.get(record.code)
+            if live is not None:
+                students, steps = len(live.students), len(live.steps)
+            else:
+                students = len(record.state.get("students", []))
+                steps = len(record.state.get("steps", []))
+            summaries.append(
+                {
+                    "code": record.code,
+                    "title": record.title,
+                    "rows": record.rows,
+                    "cols": record.cols,
+                    "students": students,
+                    "steps": steps,
+                    "createdAt": record.created_at,
+                    "updatedAt": record.updated_at,
+                }
+            )
+        return summaries
+
+    def flush(self) -> int:
+        """Copy every changed classroom to storage. Returns how many were written."""
+        written = 0
+        for room in list(self._rooms.values()):
+            if room.dirty:
+                room.dirty = False
+                self.storage.save_class(room.record())
+                written += 1
+        return written
+
+    def unload_idle(self, now: float | None = None, keep=None) -> None:
+        """Drop classrooms nobody has touched for a while, saving them first.
+
+        `keep(room)` may say a room must stay, for example while sockets are open in it.
+        A dropped classroom comes back from storage the next time someone asks for it.
+        """
+        cutoff = (time.time() if now is None else now) - IDLE_SECONDS
+        for code, room in list(self._rooms.items()):
+            if room.last_active >= cutoff or (keep is not None and keep(room)):
+                continue
+            if room.dirty:
+                room.dirty = False
+                self.storage.save_class(room.record())
             del self._rooms[code]
 
     def _new_code(self) -> str:
         while True:
             code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
-            if code not in self._rooms:
+            if code not in self._rooms and not self.storage.class_exists(code):
                 return code

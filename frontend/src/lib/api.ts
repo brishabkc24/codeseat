@@ -1,6 +1,14 @@
-import type { ClassInfo } from "./protocol";
+import type { ClassInfo, ClassSummary, Teacher } from "./protocol";
 
-export class ApiError extends Error {}
+export class ApiError extends Error {
+  /** The HTTP status, or 0 when the server could not be reached. */
+  status: number;
+
+  constructor(message: string, status = 0) {
+    super(message);
+    this.status = status;
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
@@ -17,17 +25,56 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // The error had no readable body; the status code below is all we know.
     }
-    throw new ApiError(detail || `The server answered with an error (${response.status}).`);
+    throw new ApiError(detail || `The server answered with an error (${response.status}).`, response.status);
   }
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
-export function createClass(title: string, rows: number, cols: number) {
-  return request<ClassInfo & { teacherToken: string }>("/api/classes", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title, rows, cols }),
-  });
+/** What to tell the user about a failed request. */
+export function errorText(error: unknown): string {
+  return error instanceof ApiError ? error.message : "Something went wrong. Try again.";
+}
+
+function posting(body: unknown): RequestInit {
+  return { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+}
+
+// ---- teachers: the session lives in a cookie the browser sends by itself
+
+export async function signUp(name: string, email: string, password: string): Promise<Teacher> {
+  const reply = await request<{ teacher: Teacher }>("/api/teachers", posting({ name, email, password }));
+  return reply.teacher;
+}
+
+export async function logIn(email: string, password: string): Promise<Teacher> {
+  const reply = await request<{ teacher: Teacher }>("/api/session", posting({ email, password }));
+  return reply.teacher;
+}
+
+export function logOut(): Promise<void> {
+  return request<void>("/api/session", { method: "DELETE" });
+}
+
+/** The signed-in teacher, or null when this browser has no session. */
+export async function whoAmI(): Promise<Teacher | null> {
+  const reply = await request<{ teacher: Teacher | null }>("/api/session");
+  return reply.teacher;
+}
+
+// ---- classes
+
+export async function listClasses(): Promise<ClassSummary[]> {
+  const reply = await request<{ classes: ClassSummary[] }>("/api/classes");
+  return reply.classes;
+}
+
+export function createClass(title: string, rows: number, cols: number): Promise<ClassInfo> {
+  return request<ClassInfo>("/api/classes", posting({ title, rows, cols }));
+}
+
+export function deleteClass(code: string): Promise<void> {
+  return request<void>(`/api/classes/${encodeURIComponent(code)}`, { method: "DELETE" });
 }
 
 export function findClass(code: string) {
@@ -52,14 +99,6 @@ function write(key: string, value: string): void {
   } catch {
     // see read()
   }
-}
-
-export function saveTeacherToken(code: string, token: string): void {
-  write(`codeseat.teacher.${code}`, token);
-}
-
-export function loadTeacherToken(code: string): string | null {
-  return read(`codeseat.teacher.${code}`);
 }
 
 export function saveStudent(code: string, identity: StudentIdentity): void {

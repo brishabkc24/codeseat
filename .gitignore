@@ -3,6 +3,9 @@
 __pycache__/
 .pytest_cache/
 
+# The server's database (teachers and their classes)
+backend/data/
+
 # Node
 node_modules/
 dist/

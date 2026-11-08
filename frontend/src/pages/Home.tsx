@@ -1,21 +1,17 @@
 import { type FormEvent, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import { SeatMap } from "../components/SeatMap";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { TopBar } from "../components/TopBar";
-import { ApiError, createClass, findClass, loadStudent, saveStudent, saveTeacherToken } from "../lib/api";
-
-const ROW_CHOICES = [1, 2, 3, 4, 5, 6, 7, 8];
-const COL_CHOICES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+import { errorText, findClass, loadStudent, logIn, saveStudent } from "../lib/api";
+import { useSession } from "../lib/session";
 
 type JoinError = { field: "code" | "name"; text: string };
 
-function message(error: unknown): string {
-  return error instanceof ApiError ? error.message : "Something went wrong. Try again.";
-}
-
 export function Home() {
   const navigate = useNavigate();
+  const location = useLocation();
   const linkedCode = (useParams().code ?? "").toUpperCase();
+  // Pages that need a teacher send people here with a word about why.
+  const notice = (location.state as { notice?: string } | null)?.notice ?? "";
 
   const [code, setCode] = useState(linkedCode);
   const [name, setName] = useState("");
@@ -23,13 +19,6 @@ export function Home() {
   const [joining, setJoining] = useState(false);
   const codeRef = useRef<HTMLInputElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
-
-  const [title, setTitle] = useState("");
-  const [rows, setRows] = useState(4);
-  const [cols, setCols] = useState(6);
-  const [startError, setStartError] = useState("");
-  const [starting, setStarting] = useState(false);
-  const titleRef = useRef<HTMLInputElement>(null);
 
   const join = async (event: FormEvent) => {
     event.preventDefault();
@@ -53,31 +42,10 @@ export function Home() {
       saveStudent(cleanCode, { name: cleanName, id: loadStudent(cleanCode)?.id ?? null });
       navigate(`/class/${cleanCode}`, { state: { name: cleanName } });
     } catch (error) {
-      setJoinError({ field: "code", text: message(error) });
+      setJoinError({ field: "code", text: errorText(error) });
       codeRef.current?.focus();
     } finally {
       setJoining(false);
-    }
-  };
-
-  const start = async (event: FormEvent) => {
-    event.preventDefault();
-    const cleanTitle = title.trim();
-    if (!cleanTitle) {
-      setStartError("Give the class a name, such as the lesson or the group.");
-      titleRef.current?.focus();
-      return;
-    }
-    setStartError("");
-    setStarting(true);
-    try {
-      const room = await createClass(cleanTitle, rows, cols);
-      saveTeacherToken(room.code, room.teacherToken);
-      navigate(`/teach/${room.code}`, { state: { token: room.teacherToken } });
-    } catch (error) {
-      setStartError(message(error));
-    } finally {
-      setStarting(false);
     }
   };
 
@@ -89,6 +57,12 @@ export function Home() {
           <h1>Live Python lessons, one seat each.</h1>
           <p className="lead">Students code beside the teacher, who sees every seat.</p>
         </div>
+
+        {notice && (
+          <p className="notice" role="status">
+            {notice}
+          </p>
+        )}
 
         <div className="home__forms">
           <form className="home__form" onSubmit={join} noValidate>
@@ -151,88 +125,119 @@ export function Home() {
             </button>
           </form>
 
-          <form className="home__form" onSubmit={start} noValidate>
-            <h2>Start a class</h2>
-            <div className="home__setup">
-              <div className="home__fields">
-                <div className="field">
-                  <label className="field__label" htmlFor="start-title">
-                    Class name
-                  </label>
-                  <input
-                    id="start-title"
-                    ref={titleRef}
-                    className="input"
-                    name="title"
-                    value={title}
-                    onChange={(event) => setTitle(event.target.value)}
-                    maxLength={60}
-                    autoComplete="off"
-                    aria-required="true"
-                    aria-invalid={startError !== ""}
-                    aria-describedby="start-title-help"
-                  />
-                  <p
-                    id="start-title-help"
-                    className={startError ? "field__help field__help--error" : "field__help"}
-                    role={startError ? "alert" : undefined}
-                  >
-                    {startError || "Students see this at the top of the class."}
-                  </p>
-                </div>
-                <div className="home__sizes">
-                  <div className="field">
-                    <label className="field__label" htmlFor="start-rows">
-                      Rows
-                    </label>
-                    <select
-                      id="start-rows"
-                      className="input"
-                      name="rows"
-                      value={rows}
-                      onChange={(event) => setRows(Number(event.target.value))}
-                    >
-                      {ROW_CHOICES.map((choice) => (
-                        <option key={choice} value={choice}>
-                          {choice}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="field">
-                    <label className="field__label" htmlFor="start-cols">
-                      Seats per row
-                    </label>
-                    <select
-                      id="start-cols"
-                      className="input"
-                      name="cols"
-                      value={cols}
-                      onChange={(event) => setCols(Number(event.target.value))}
-                    >
-                      {COL_CHOICES.map((choice) => (
-                        <option key={choice} value={choice}>
-                          {choice}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-                <button type="submit" className="btn" disabled={starting} aria-busy={starting}>
-                  {starting ? "Opening…" : "Open classroom"}
-                </button>
-              </div>
-
-              <figure className="home__preview">
-                <SeatMap rows={rows} cols={cols} seats={[]} mode="preview" compact />
-                <figcaption>
-                  <span className="mono">{rows * cols}</span> seats, row A nearest the teacher
-                </figcaption>
-              </figure>
-            </div>
-          </form>
+          <section className="home__form" aria-labelledby="teachers-title">
+            <h2 id="teachers-title">Teachers</h2>
+            <TeacherPanel />
+          </section>
         </div>
       </main>
     </>
+  );
+}
+
+/** Who is signed in, or the way in: a login form with a link to make an account. */
+function TeacherPanel() {
+  const navigate = useNavigate();
+  const session = useSession();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const emailRef = useRef<HTMLInputElement>(null);
+
+  if (!session.known) {
+    return (
+      <p className="field__help" role="status">
+        Checking who is signed in…
+      </p>
+    );
+  }
+
+  if (session.teacher) {
+    return (
+      <>
+        <p>
+          Signed in as <strong>{session.teacher.name}</strong>.
+        </p>
+        <div className="home__actions">
+          <Link className="btn btn--primary" to="/teach">
+            Your classes
+          </Link>
+          <button type="button" className="btn" onClick={() => void session.signOut()}>
+            Log out
+          </button>
+        </div>
+      </>
+    );
+  }
+
+  const login = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!email.trim() || !password) {
+      setError("Type your email and password.");
+      emailRef.current?.focus();
+      return;
+    }
+    setError("");
+    setBusy(true);
+    try {
+      session.signedIn(await logIn(email.trim(), password));
+      navigate("/teach");
+    } catch (failure) {
+      setError(errorText(failure));
+      emailRef.current?.focus();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form className="home__login" onSubmit={login} noValidate>
+      <div className="field">
+        <label className="field__label" htmlFor="login-email">
+          Email
+        </label>
+        <input
+          id="login-email"
+          ref={emailRef}
+          className="input"
+          type="email"
+          name="email"
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+          autoComplete="email"
+          aria-required="true"
+          aria-invalid={error !== ""}
+        />
+      </div>
+      <div className="field">
+        <label className="field__label" htmlFor="login-password">
+          Password
+        </label>
+        <input
+          id="login-password"
+          className="input"
+          type="password"
+          name="password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          autoComplete="current-password"
+          aria-required="true"
+          aria-invalid={error !== ""}
+        />
+        <p
+          className={error ? "field__help field__help--error" : "field__help"}
+          role={error ? "alert" : undefined}
+        >
+          {error || "Your classes, their lessons and seats are kept with your account."}
+        </p>
+      </div>
+      <button type="submit" className="btn btn--primary" disabled={busy} aria-busy={busy}>
+        {busy ? "Logging in…" : "Log in"}
+      </button>
+      <p className="home__alt">
+        New here? <Link to="/signup">Create a teacher account</Link>.
+      </p>
+    </form>
   );
 }

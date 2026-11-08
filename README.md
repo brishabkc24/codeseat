@@ -28,7 +28,16 @@ Milestone 2, lesson steps, works locally:
   and step by step when the teacher opens that seat
 - The teacher can point the class at a step, marked "Now" on every screen
 
-Planned next: teacher accounts and saved classes, deployment.
+Milestone 3, teacher accounts and saved classes, works locally:
+
+- Teachers sign up with an email and a password; the session is a cookie
+- A class belongs to its teacher and is kept in SQLite: its join code, lesson, seats
+  and every student's code and passes survive a server restart
+- The classes page lists a teacher's classes with their counts, makes new ones and
+  deletes old ones
+- Students still need only the code and a name
+
+Planned next: deployment.
 
 ## Run it
 
@@ -49,8 +58,11 @@ npm install
 npm run dev
 ```
 
-Open http://127.0.0.1:5173. To try both roles on one computer, start a class in one
-window and join it from a private window.
+Open http://127.0.0.1:5173. To try both roles on one computer, open the teacher's
+class in one window and join it from a private window.
+
+The server keeps teachers and their classes in `backend/data/codeseat.db`, which it
+creates on first start. Set `CODESEAT_DATABASE` to put the file elsewhere.
 
 ## Tests
 
@@ -69,14 +81,20 @@ npm run typecheck
 | Part | Where | What it does |
 | --- | --- | --- |
 | Classroom rules | `backend/app/rooms.py` | Seats, students, lesson steps and what each role may see, with no web code |
-| Server | `backend/app/main.py` | REST to open a class, one WebSocket per person in it |
+| Accounts | `backend/app/accounts.py` | Password hashing (scrypt), session tokens, a brake on password guessing |
+| Storage | `backend/app/storage.py` | SQLite: teachers, sessions, and one JSON document per class |
+| Server | `backend/app/main.py` | REST for accounts and classes, one WebSocket per person in a class |
 | Live connection | `frontend/src/lib/useClassroom.ts` | Mirrors the class state and reconnects when the link drops |
 | Python runner | `frontend/public/py-worker.js` | Pyodide in a Web Worker, so an endless loop cannot freeze the page |
 | Screens | `frontend/src/pages/` | Start page, student room, teacher room |
 
-Three things to know before deploying:
+Four things to know before deploying:
 
-- Classes live in the server's memory. Restarting the server ends every class.
+- Accounts and classes live in one SQLite file, so the server needs a disk that
+  survives restarts and deploys. A host with an ephemeral filesystem would lose every
+  account on each deploy.
+- The session cookie is marked `Secure` only when the request arrives over HTTPS.
+  Behind a proxy, run uvicorn with `--proxy-headers` so it knows the real scheme.
 - `input()` needs the page to be cross-origin isolated. The dev server sends the two
   headers for that (see `frontend/vite.config.ts`); production hosting must send them too.
 - A step check is judged by the server, but from the output the student's browser

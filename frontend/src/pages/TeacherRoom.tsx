@@ -1,27 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { CodeEditor } from "../components/CodeEditor";
 import { LessonEditor, type StepDraft } from "../components/LessonEditor";
 import { RoomClosed, RoomLoading } from "../components/RoomStates";
 import { RunPanel } from "../components/RunPanel";
 import { SeatMap } from "../components/SeatMap";
 import { TopBar } from "../components/TopBar";
-import { loadTeacherToken } from "../lib/api";
 import { classes } from "../lib/lesson";
 import { type Hello, type Seat, seatLabel } from "../lib/protocol";
+import { useSession } from "../lib/session";
 import { useClassroom } from "../lib/useClassroom";
 import { usePython } from "../lib/usePython";
 import { useThrottledSend } from "../lib/useThrottledSend";
 
 export function TeacherRoom() {
   const code = (useParams().code ?? "").toUpperCase();
-  const location = useLocation();
-  const [token] = useState<string | null>(
-    () => loadTeacherToken(code) ?? (location.state as { token?: string } | null)?.token ?? null,
-  );
+  const session = useSession();
 
-  if (!token) return <RoomClosed reason="not-teacher" code={code} />;
-  return <TeacherDesk code={code} token={token} />;
+  if (!session.known) return <RoomLoading />;
+  if (!session.teacher) return <RoomClosed reason="not-teacher" code={code} />;
+  return <TeacherDesk code={code} teacherName={session.teacher.name} />;
 }
 
 function parseSeat(value: string | null): number | null {
@@ -36,8 +34,9 @@ function stateWords(seat: Seat): string {
   return "Not run yet";
 }
 
-function TeacherDesk({ code, token }: { code: string; token: string }) {
-  const hello = useMemo<Hello>(() => ({ role: "teacher", token }), [token]);
+function TeacherDesk({ code, teacherName }: { code: string; teacherName: string }) {
+  // The session cookie goes with the socket, so the hello carries nothing secret.
+  const hello = useMemo<Hello>(() => ({ role: "teacher" }), []);
   const { classroom, send, dismissNotice } = useClassroom(code, hello);
   const { room, steps } = classroom;
 
@@ -119,12 +118,19 @@ function TeacherDesk({ code, token }: { code: string; token: string }) {
   }
   if (!room) return <RoomLoading />;
 
+  const barEnd = (
+    <>
+      <span className="bar__who">{teacherName}</span>
+      <Link className="btn" to="/teach">
+        Your classes
+      </Link>
+    </>
+  );
+
   if (editing) {
     return (
       <>
-        <TopBar classroom={classroom}>
-          <span className="bar__who">Teacher’s desk</span>
-        </TopBar>
+        <TopBar classroom={classroom}>{barEnd}</TopBar>
         <main className="lesson-page">
           <LessonEditor
             steps={steps}
@@ -143,9 +149,7 @@ function TeacherDesk({ code, token }: { code: string; token: string }) {
 
   return (
     <>
-      <TopBar classroom={classroom}>
-        <span className="bar__who">Teacher’s desk</span>
-      </TopBar>
+      <TopBar classroom={classroom}>{barEnd}</TopBar>
       <main className="work">
         <section className="pane pane--split" aria-label="Your code">
           <div className="pane__head">

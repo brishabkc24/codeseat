@@ -23,11 +23,19 @@ export function RoomClosed({ reason, detail, code }: ClosedProps) {
         )}
         {reason === "not-teacher" && (
           <>
-            <h1>This browser did not start this class</h1>
-            <p>The teacher’s desk opens only in the browser that started the class.</p>
-            <Link className="btn" to={`/join/${code}`}>
-              Join as a student
-            </Link>
+            <h1>This desk is not yours to open</h1>
+            <p>
+              Only the teacher who made this class can open its desk. Log in with that account, or join
+              the class as a student.
+            </p>
+            <div className="closed__actions">
+              <Link className="btn btn--primary" to="/" state={{ notice: "Log in to open your class." }}>
+                Log in
+              </Link>
+              <Link className="btn" to={`/join/${code}`}>
+                Join as a student
+              </Link>
+            </div>
           </>
         )}
         {reason === "replaced" && (

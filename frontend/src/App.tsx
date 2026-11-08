@@ -1,6 +1,9 @@
 import { BrowserRouter, Link, Route, Routes } from "react-router-dom";
 import { TopBar } from "./components/TopBar";
+import { SessionProvider } from "./lib/session";
+import { Classes } from "./pages/Classes";
 import { Home } from "./pages/Home";
+import { SignUp } from "./pages/SignUp";
 import { StudentRoom } from "./pages/StudentRoom";
 import { TeacherRoom } from "./pages/TeacherRoom";
 
@@ -22,13 +25,17 @@ function NotFound() {
 export function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/join/:code" element={<Home />} />
-        <Route path="/class/:code" element={<StudentRoom />} />
-        <Route path="/teach/:code" element={<TeacherRoom />} />
-        <Route path="*" element={<NotFound />} />
-      </Routes>
+      <SessionProvider>
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/join/:code" element={<Home />} />
+          <Route path="/signup" element={<SignUp />} />
+          <Route path="/class/:code" element={<StudentRoom />} />
+          <Route path="/teach" element={<Classes />} />
+          <Route path="/teach/:code" element={<TeacherRoom />} />
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </SessionProvider>
     </BrowserRouter>
   );
 }

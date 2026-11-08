@@ -2,28 +2,43 @@
 
 from __future__ import annotations
 
-import time
 from contextlib import contextmanager
+from unittest.mock import ANY
 
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app import main
-from app.rooms import MAX_STEPS, ROOM_TTL_SECONDS, ClassroomStore, RoomError, outputs_match
+from app.accounts import LOGIN_ATTEMPTS, LOGIN_WINDOW_SECONDS, LoginBrake, check_password, hash_password
+from app.rooms import IDLE_SECONDS, MAX_STEPS, ClassroomStore, RoomError, outputs_match
+from app.storage import Storage, TeacherRecord
 
 
 @pytest.fixture
 def client():
-    main.store = ClassroomStore()
+    main.store = ClassroomStore(Storage(":memory:"))
     main.hub = main.Hub()
+    main.brake = LoginBrake()
     with TestClient(main.app) as test_client:
         yield test_client
 
 
+TEACHER = {"name": "Ms Rai", "email": "rai@example.com", "password": "correct horse battery"}
+
+
+def sign_up(client, **changes):
+    response = client.post("/api/teachers", json={**TEACHER, **changes})
+    assert response.status_code == 201, response.text
+    return response.json()["teacher"]
+
+
 def open_class(client, rows=2, cols=3):
+    """A class of the signed-in teacher; signs one up first when the client has no session."""
+    if client.get("/api/session").json()["teacher"] is None:
+        sign_up(client)
     response = client.post("/api/classes", json={"title": "Intro to Python", "rows": rows, "cols": cols})
-    assert response.status_code == 201
+    assert response.status_code == 201, response.text
     return response.json()
 
 
@@ -45,8 +60,9 @@ def student(client, code, name, student_id=None):
 
 @contextmanager
 def teacher(client, room):
+    """The teacher's socket: the client's session cookie travels with the connection."""
     with client.websocket_connect(f"/ws/{room['code']}") as ws:
-        ws.send_json({"type": "hello", "role": "teacher", "token": room["teacherToken"]})
+        ws.send_json({"type": "hello", "role": "teacher"})
         ws.welcome = next_of(ws, "welcome")
         yield ws
 
@@ -84,7 +100,7 @@ def seats_with(desk, wanted):
 def test_create_and_look_up_a_class(client):
     room = open_class(client)
     assert len(room["code"]) == 6
-    assert room["teacherToken"]
+    assert set(room) == {"code", "title", "rows", "cols"}
 
     found = client.get(f"/api/classes/{room['code'].lower()}")  # codes are not case sensitive
     assert found.status_code == 200
@@ -95,7 +111,6 @@ def test_create_and_look_up_a_class(client):
         "cols": 3,
         "seatsTaken": 0,
     }
-    assert "teacherToken" not in found.json()
 
 
 def test_unknown_class_is_404(client):
@@ -103,6 +118,7 @@ def test_unknown_class_is_404(client):
 
 
 def test_classroom_size_is_limited(client):
+    sign_up(client)
     response = client.post("/api/classes", json={"title": "Too big", "rows": 50, "cols": 50})
     assert response.status_code == 400
 
@@ -117,10 +133,18 @@ def test_socket_to_unknown_class_is_closed(client):
     assert closed.value.code == main.CLOSE_NO_CLASS
 
 
-def test_wrong_teacher_token_is_refused(client):
+def test_teacher_socket_needs_the_owners_session(client):
     room = open_class(client)
+    client.cookies.clear()
     with client.websocket_connect(f"/ws/{room['code']}") as ws:
-        ws.send_json({"type": "hello", "role": "teacher", "token": "guess"})
+        ws.send_json({"type": "hello", "role": "teacher"})
+        with pytest.raises(WebSocketDisconnect) as closed:
+            ws.receive_json()
+    assert closed.value.code == main.CLOSE_NOT_TEACHER
+
+    sign_up(client, email="other@example.com")
+    with client.websocket_connect(f"/ws/{room['code']}") as ws:
+        ws.send_json({"type": "hello", "role": "teacher"})
         with pytest.raises(WebSocketDisconnect) as closed:
             ws.receive_json()
     assert closed.value.code == main.CLOSE_NOT_TEACHER
@@ -459,22 +483,193 @@ def test_outputs_match_rules(expected, actual, same):
     assert outputs_match(expected, actual) is same
 
 
+# ---------------------------------------------------------------- teacher accounts
+
+
+def test_sign_up_logs_the_teacher_in(client):
+    teacher = sign_up(client)
+    assert teacher["name"] == "Ms Rai" and teacher["email"] == "rai@example.com"
+    assert "password" not in teacher and "password_hash" not in teacher
+    assert client.get("/api/session").json()["teacher"] == teacher
+    assert main.SESSION_COOKIE in client.cookies
+
+
+def test_sign_up_is_validated(client):
+    for changes, detail in [
+        ({"email": "rai"}, "That does not look like an email address."),
+        ({"password": "short"}, "Use a password of at least 8 characters."),
+        ({"name": "  "}, "Your name is missing."),
+    ]:
+        response = client.post("/api/teachers", json={**TEACHER, **changes})
+        assert response.status_code == 400
+        assert response.json()["detail"] == detail
+
+
+def test_an_email_has_one_account(client):
+    sign_up(client)
+    response = client.post("/api/teachers", json={**TEACHER, "email": "RAI@example.com", "name": "Other"})
+    assert response.status_code == 409
+
+
+def test_log_in_and_out(client):
+    teacher = sign_up(client)
+    client.cookies.clear()
+    assert client.get("/api/session").json() == {"teacher": None}
+
+    wrong = client.post("/api/session", json={"email": "rai@example.com", "password": "nope nope nope"})
+    assert wrong.status_code == 401
+    assert wrong.json()["detail"] == "Wrong email or password."
+    assert main.SESSION_COOKIE not in client.cookies
+
+    right = client.post("/api/session", json={"email": " Rai@Example.com ", "password": TEACHER["password"]})
+    assert right.status_code == 200
+    assert right.json()["teacher"] == teacher
+    assert client.get("/api/session").json()["teacher"] == teacher
+
+    assert client.delete("/api/session").status_code == 204
+    assert client.get("/api/session").json() == {"teacher": None}
+
+
+def test_wrong_passwords_are_braked(client):
+    sign_up(client)
+    client.cookies.clear()
+    login = {"email": TEACHER["email"], "password": "wrong wrong wrong"}
+    for _ in range(LOGIN_ATTEMPTS):
+        assert client.post("/api/session", json=login).status_code == 401
+    blocked = client.post("/api/session", json={**login, "password": TEACHER["password"]})
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"].startswith("Too many wrong passwords.")
+
+    # An unknown email is braked the same way, so the brake does not tell who has an account.
+    stranger = {"email": "nobody@example.com", "password": "wrong wrong wrong"}
+    for _ in range(LOGIN_ATTEMPTS):
+        assert client.post("/api/session", json=stranger).status_code == 401
+    assert client.post("/api/session", json=stranger).status_code == 429
+
+
+def test_login_brake_rules():
+    brake = LoginBrake()
+    for moment in range(LOGIN_ATTEMPTS):
+        assert brake.wait("a@b.c", now=1000 + moment) == 0
+        brake.failed("a@b.c", now=1000 + moment)
+    assert 0 < brake.wait("a@b.c", now=1010) <= LOGIN_WINDOW_SECONDS
+    assert brake.wait("a@b.c", now=1000 + LOGIN_WINDOW_SECONDS + 1) == 0  # the window has passed
+    brake.failed("a@b.c", now=2000)
+    brake.succeeded("a@b.c")
+    assert brake.wait("a@b.c", now=2000) == 0
+
+
+def test_passwords_are_hashed_and_checked():
+    stored = hash_password("correct horse battery")
+    assert stored.startswith("scrypt$") and "correct" not in stored
+    assert check_password("correct horse battery", stored)
+    assert not check_password("correct horse batter", stored)
+    assert not check_password("anything", "not a hash")
+    assert hash_password("same") != hash_password("same")  # salted
+
+
+# ---------------------------------------------------------------- saved classes
+
+
+def test_classes_need_a_signed_in_teacher(client):
+    assert client.post("/api/classes", json={"title": "x", "rows": 1, "cols": 1}).status_code == 401
+    assert client.get("/api/classes").status_code == 401
+    assert client.delete("/api/classes/ABCDEF").status_code == 401
+
+
+def test_teacher_lists_and_deletes_own_classes(client):
+    room = open_class(client)
+    other = open_class(client, rows=1, cols=1)
+    listed = client.get("/api/classes").json()["classes"]
+    assert [item["code"] for item in listed] == [other["code"], room["code"]]  # newest first
+    assert listed[1] == {
+        "code": room["code"],
+        "title": "Intro to Python",
+        "rows": 2,
+        "cols": 3,
+        "students": 0,
+        "steps": 0,
+        "createdAt": ANY,
+        "updatedAt": ANY,
+    }
+
+    with student(client, room["code"], "Asha") as asha:
+        sit(asha, 0)
+        assert client.delete(f"/api/classes/{room['code']}").status_code == 204
+        with pytest.raises(WebSocketDisconnect) as closed:
+            while True:
+                asha.receive_json()
+        assert closed.value.code == main.CLOSE_NO_CLASS
+    assert client.get(f"/api/classes/{room['code']}").status_code == 404
+    assert [item["code"] for item in client.get("/api/classes").json()["classes"]] == [other["code"]]
+
+
+def test_another_teacher_cannot_touch_the_class(client):
+    room = open_class(client)
+    client.cookies.clear()
+    sign_up(client, email="other@example.com")
+    assert client.delete(f"/api/classes/{room['code']}").status_code == 403
+    assert client.get("/api/classes").json()["classes"] == []
+    # Students need no account; the class is still there for them.
+    assert client.get(f"/api/classes/{room['code']}").status_code == 200
+
+
+def test_a_class_survives_a_server_restart(client):
+    room = open_class(client)
+    with teacher(client, room) as desk, student(client, room["code"], "Asha") as asha:
+        (hello,) = set_steps(desk, [STEP])["steps"]
+        desk.send_json({"type": "source", "text": "# lesson 1"})
+        sit(asha, 4)
+        asha.send_json({"type": "source", "text": "print('hi')"})
+        check(asha, hello["id"], "Hello, world!")
+        student_id = asha.welcome["you"]["id"]
+
+    # A new store over the same database is what a restarted server sees.
+    main.store.flush()
+    main.store = ClassroomStore(main.store.storage)
+    with student(client, room["code"], "Asha", student_id) as back:
+        assert back.welcome["you"]["seat"] == 4
+        assert back.welcome["you"]["source"] == "print('hi')"
+        assert back.welcome["you"]["passed"] == [hello["id"]]
+        assert back.welcome["teacherSource"] == "# lesson 1"
+        assert back.welcome["steps"][0]["id"] == hello["id"]
+    with teacher(client, room) as desk:
+        assert desk.welcome["seats"] == [
+            {"seat": 4, "name": "Asha", "online": False, "lastRun": "ok", "passed": [hello["id"]]}
+        ]
+    listed = client.get("/api/classes").json()["classes"][0]
+    assert (listed["students"], listed["steps"]) == (1, 1)
+
+
 # ---------------------------------------------------------------- rules on their own
 
 
-def test_old_classrooms_are_pruned():
-    store = ClassroomStore()
-    old = store.create("Old", 1, 1)
-    fresh = store.create("Fresh", 1, 1)
-    old.created_at = time.time() - ROOM_TTL_SECONDS - 1
-    store.prune()
-    assert store.get(old.code) is None
-    assert store.get(fresh.code) is fresh
+def bare_store():
+    """A store on its own database, with one teacher in it to own the classes."""
+    storage = Storage(":memory:")
+    storage.add_teacher(TeacherRecord(id="t1", name="Ms Rai", email="rai@example.com", password_hash="-", created_at=0))
+    return ClassroomStore(storage)
+
+
+def test_idle_classrooms_leave_memory_and_come_back():
+    store = bare_store()
+    room = store.create("t1", "Intro", 2, 3)
+    room.set_teacher_source("x = 1")
+    room.last_active = 0
+    store.unload_idle(now=IDLE_SECONDS + 1, keep=lambda r: False)
+    again = store.get(room.code)
+    assert again is not room
+    assert again.teacher_source == "x = 1"  # saved before it left memory
+
+    # A classroom with sockets open stays, however long it has been quiet.
+    again.last_active = 0
+    store.unload_idle(now=IDLE_SECONDS + 1, keep=lambda r: True)
+    assert store.get(room.code) is again
 
 
 def test_long_code_is_refused():
-    store = ClassroomStore()
-    room = store.create("Class", 1, 1)
+    store = bare_store()
+    room = store.create("t1", "Class", 1, 1)
     asha = room.join(None, "Asha")
     with pytest.raises(RoomError):
         room.set_source(asha, "x" * 50_001)
