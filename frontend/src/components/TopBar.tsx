@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import type { Classroom } from "../lib/useClassroom";
+import { useInstallPrompt } from "../lib/useInstallPrompt";
 
 type Props = {
   /** The class being shown, once the server has described it. */
@@ -10,6 +11,7 @@ type Props = {
 
 export function TopBar({ classroom, children }: Props) {
   const room = classroom?.room;
+  const { canInstall, install } = useInstallPrompt();
   return (
     <header className="bar">
       <Link className="bar__mark" to="/" aria-label="CodeSeat, back to the start">
@@ -24,6 +26,11 @@ export function TopBar({ classroom, children }: Props) {
         </div>
       )}
       <div className="bar__end">
+        {canInstall && (
+          <button type="button" className="btn" onClick={() => void install()}>
+            Install app
+          </button>
+        )}
         {classroom?.phase === "reconnecting" && (
           <span className="status status--warn" role="status">
             Connection lost. Reconnecting…

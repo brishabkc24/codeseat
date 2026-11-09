@@ -37,6 +37,10 @@ Milestone 3, teacher accounts and saved classes, works locally:
   deletes old ones
 - Students still need only the code and a name
 
+CodeSeat is also an installable web app: browsers that allow it show an "Install app"
+button in the top bar, and the installed app opens to its own screen, with its icon
+on the home screen or taskbar.
+
 Planned next: deployment.
 
 ## Run it
@@ -63,6 +67,11 @@ class in one window and join it from a private window.
 
 The server keeps teachers and their classes in `backend/data/codeseat.db`, which it
 creates on first start. Set `CODESEAT_DATABASE` to put the file elsewhere.
+
+The development server leaves the service worker out, so "Install app" does not
+appear there. To try the installable build, run `npm run build` and then
+`npm run preview` in `frontend/`, and open http://127.0.0.1:4173. The icons come
+from `frontend/scripts/make-icons.py`, which draws them from the theme's colours.
 
 ## Tests
 

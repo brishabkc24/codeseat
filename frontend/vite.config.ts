@@ -10,6 +10,10 @@ const isolation = {
 };
 
 const backend = "http://127.0.0.1:8020";
+const proxy = {
+  "/api": backend,
+  "/ws": { target: backend, ws: true },
+};
 
 export default defineConfig({
   plugins: [react()],
@@ -18,10 +22,14 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     headers: isolation,
-    proxy: {
-      "/api": backend,
-      "/ws": { target: backend, ws: true },
-    },
+    proxy,
   },
-  preview: { headers: isolation },
+  // `vite preview` serves the production build (with the service worker) on 4173.
+  preview: {
+    host: "127.0.0.1",
+    port: 4173,
+    strictPort: true,
+    headers: isolation,
+    proxy,
+  },
 });
