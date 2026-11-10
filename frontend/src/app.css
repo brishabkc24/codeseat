@@ -2,7 +2,8 @@
  * nav: a top bar holding the wordmark, the class with its join code, and the connection state · signature: the seat map, the classroom drawn desk by desk · states: connecting, reconnecting, closed, empty room, full room, Python loading, running, waiting for input, failed
  * axes: dark/grotesk-sans/warm · posture: committed · contrast: pass · v2.0.0 */
 /* Hallmark · pre-emit critique: P4 H4 E4 S5 R4 V4 · weakest: H, three panes compete on the teacher's screen; the seat map takes the right half under one row of figures so the eye lands on the room before the editors
- * milestone 2 · lesson steps: the student's lesson pane sits above the teacher's code, one accent (the Now marker) and one success colour (a pass); the teacher's lesson list and seat passes reuse the step row, so progress reads the same on both sides */
+ * milestone 2 · lesson steps: the student's lesson pane sits above the teacher's code, one accent (the Now marker) and one success colour (a pass); the teacher's lesson list and seat passes reuse the step row, so progress reads the same on both sides
+ * who needs help · a raised hand is the only filled seat on the map, in the signal colour; stuck and idle are words on the seat, not colours of their own; the queue above the map names who to go to next */
 @import url("./tokens.css");
 @import url("./base.css");
 
@@ -634,6 +635,36 @@ button.seat:focus-visible {
   background: var(--color-accent);
 }
 
+/* A raised hand fills the seat with the signal colour, the loudest thing on the
+   map, until the teacher opens that seat. */
+.seat--hand:not(.seat--current) {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-accent-ink);
+}
+
+.seat--hand:not(.seat--current) .seat__label,
+.seat--hand:not(.seat--current) .seat__state,
+.seat--hand:not(.seat--current) .seat__steps {
+  color: var(--color-accent-ink);
+}
+
+@media (hover: hover) {
+  button.seat--hand:not(.seat--current):hover {
+    background: var(--color-focus);
+    border-color: var(--color-focus);
+  }
+}
+
+.seat__state--hand {
+  color: var(--color-accent);
+}
+
+/* Quiet for a while: the name dims, as it does for a student who is offline. */
+.seat--idle .seat__name {
+  color: var(--color-muted);
+}
+
 .room--compact {
   gap: var(--space-sm);
 }
@@ -1209,7 +1240,101 @@ button.seat:focus-visible {
 }
 
 .desk__map {
+  display: grid;
+  gap: var(--space-md);
   padding: var(--space-md);
+}
+
+/* Who to go to next: raised hands in the order they went up, then students who look stuck. */
+.help {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-md);
+  min-width: 0;
+}
+
+.help__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+
+.help__item {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  max-width: 100%;
+  min-height: var(--control-small);
+  padding: 0 var(--space-sm);
+  border: var(--rule-hair) solid var(--color-accent);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-ink);
+  font: 500 var(--text-sm) / 1 var(--font-body);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-short) var(--ease-out),
+    transform var(--dur-micro) var(--ease-out);
+}
+
+/* A 32px control with a 44px target. */
+.help__item::before {
+  content: "";
+  position: absolute;
+  inset: -6px 0;
+}
+
+@media (hover: hover) {
+  .help__item:hover {
+    background: var(--color-paper-2);
+  }
+}
+
+.help__item:active {
+  transform: translateY(1px);
+}
+
+.help__item:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.help__item--open {
+  background: var(--color-paper-3);
+}
+
+.help__place {
+  font-family: var(--font-outlier);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-accent);
+}
+
+/* Nobody asked: a student who only looks stuck gets a quieter entry than a raised hand. */
+.help__item--stuck {
+  border-color: var(--color-rule);
+}
+
+.help__item--stuck .help__place {
+  color: var(--color-error);
+}
+
+.help__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.help__seat {
+  font-family: var(--font-outlier);
+  font-size: var(--text-xs);
+  color: var(--color-muted);
 }
 
 .viewer {
@@ -1279,7 +1404,8 @@ button.seat:focus-visible {
   }
 
   .bar__code,
-  .bar__who {
+  .bar__who,
+  .pane__note--extra {
     display: none;
   }
 
@@ -1362,11 +1488,13 @@ button.seat:focus-visible {
   .btn,
   .input,
   .step,
+  .help__item,
   button.seat {
     transition: none;
   }
 
   .btn:active,
+  .help__item:active,
   button.seat:active {
     transform: none;
   }

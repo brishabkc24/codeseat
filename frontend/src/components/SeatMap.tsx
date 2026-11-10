@@ -1,5 +1,7 @@
 import type { CSSProperties } from "react";
+import { classes } from "../lib/lesson";
 import { type Seat, seatLabel } from "../lib/protocol";
+import { seatState } from "../lib/seats";
 
 type Props = {
   rows: number;
@@ -18,13 +20,6 @@ type Props = {
   /** Teacher only: how many lesson steps there are, so each seat can show its passes. */
   stepCount?: number;
 };
-
-function runWord(seat: Seat): { text: string; tone: "" | "error" | "ok" } {
-  if (!seat.online) return { text: "Offline", tone: "" };
-  if (seat.lastRun === "error") return { text: "Error", tone: "error" };
-  if (seat.lastRun === "ok") return { text: "Ran fine", tone: "ok" };
-  return { text: "Not run yet", tone: "" };
-}
 
 export function SeatMap({
   rows,
@@ -66,18 +61,20 @@ export function SeatMap({
           }
 
           if (mode === "watch" && occupant) {
-            const state = runWord(occupant);
+            const state = seatState(occupant);
             const passed = occupant.passed?.length ?? 0;
             const progress = stepCount > 0 ? `, ${passed} of ${stepCount} steps passed` : "";
             return (
               <li key={index}>
                 <button
                   type="button"
-                  className={[
+                  className={classes(
                     "seat seat--taken",
-                    isCurrent ? "seat--current" : "",
-                    occupant.online ? "" : "seat--offline",
-                  ].join(" ")}
+                    isCurrent && "seat--current",
+                    !occupant.online && "seat--offline",
+                    state.tone === "hand" && "seat--hand",
+                    state.tone === "idle" && "seat--idle",
+                  )}
                   aria-pressed={isCurrent}
                   aria-label={`${occupant.name}, seat ${label}, ${state.text.toLowerCase()}${progress}`}
                   onClick={() => onSelect?.(index)}

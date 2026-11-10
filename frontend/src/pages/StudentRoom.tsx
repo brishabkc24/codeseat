@@ -210,7 +210,20 @@ function StudentDesk({ code, identity }: { code: string; identity: StudentIdenti
         <section className="pane pane--split" aria-label="Your code">
           <div className="pane__head">
             <h2 className="pane__title">Your code</h2>
-            <span className="pane__note">Your teacher can see this</span>
+            <div className="pane__tools">
+              <span className={you.hand ? "status status--warn" : "pane__note pane__note--extra"} role="status">
+                {you.hand ? "Hand up" : "Your teacher can see this"}
+              </span>
+              <button
+                type="button"
+                className="btn"
+                aria-pressed={you.hand}
+                disabled={classroom.phase !== "open"}
+                onClick={() => send({ type: "hand", up: !you.hand })}
+              >
+                {you.hand ? "Lower hand" : "Raise hand"}
+              </button>
+            </div>
           </div>
           <div className="pane__body">
             <CodeEditor

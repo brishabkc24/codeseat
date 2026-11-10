@@ -37,6 +37,14 @@ Milestone 3, teacher accounts and saved classes, works locally:
   deletes old ones
 - Students still need only the code and a name
 
+The teacher also sees who needs help:
+
+- A student can raise a hand. Hands queue up above the seat map in the order they
+  went up, the seat fills with the signal colour, and the tab's title counts them
+- A seat shows "Stuck" after three failed tries in a row (crashes, or checks that did
+  not pass) and "Idle" after three minutes without typing, running or clicking
+- Only the teacher sees any of this; classmates see who sits where and nothing more
+
 CodeSeat is also an installable web app: browsers that allow it show an "Install app"
 button in the top bar, and the installed app opens to its own screen, with its icon
 on the home screen or taskbar.
@@ -89,7 +97,7 @@ npm run typecheck
 
 | Part | Where | What it does |
 | --- | --- | --- |
-| Classroom rules | `backend/app/rooms.py` | Seats, students, lesson steps and what each role may see, with no web code |
+| Classroom rules | `backend/app/rooms.py` | Seats, students, lesson steps, raised hands and what each role may see, with no web code |
 | Accounts | `backend/app/accounts.py` | Password hashing (scrypt), session tokens, a brake on password guessing |
 | Storage | `backend/app/storage.py` | SQLite: teachers, sessions, and one JSON document per class |
 | Server | `backend/app/main.py` | REST for accounts and classes, one WebSocket per person in a class |

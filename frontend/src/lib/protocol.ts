@@ -23,12 +23,25 @@ export type Seat = {
   seat: number;
   name: string;
   online: boolean;
-  /** Only the teacher receives these two. */
+  // Only the teacher receives the rest.
   lastRun?: RunResult | null;
   passed?: string[];
+  /** The place in the queue of raised hands (1 went up first), or null while the hand is down. */
+  hand?: number | null;
+  /** Several failed tries in a row: crashes, or checks that did not pass. */
+  stuck?: boolean;
+  /** Whole minutes without typing, running or clicking, once that is long enough to count; else null. */
+  idleMinutes?: number | null;
 };
 
-export type You = { id: string; name: string; seat: number | null; source: string; passed: string[] };
+export type You = {
+  id: string;
+  name: string;
+  seat: number | null;
+  source: string;
+  passed: string[];
+  hand: boolean;
+};
 
 export type ServerMessage =
   | {
@@ -42,7 +55,7 @@ export type ServerMessage =
       you?: You;
     }
   | { type: "seats"; seats: Seat[]; lobby?: string[] }
-  | { type: "you"; seat?: number | null; passed?: string[] }
+  | { type: "you"; seat?: number | null; passed?: string[]; hand?: boolean }
   | { type: "teacher_source"; text: string }
   | { type: "student_source"; seat: number; text: string }
   | { type: "steps"; steps: Step[]; currentStep: string | null }

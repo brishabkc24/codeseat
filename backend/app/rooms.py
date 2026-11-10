@@ -30,6 +30,8 @@ MAX_EXPECTED = 5_000
 MAX_INPUT = 2_000
 MAX_CHECK_OUTPUT = 20_000
 IDLE_SECONDS = 2 * 60 * 60  # a classroom nobody has touched for this long leaves memory
+STUDENT_IDLE_SECONDS = 3 * 60  # a seated student who has not typed or run anything for this long shows as idle
+STUCK_AFTER = 3  # failed tries in a row (crashes, or checks that did not pass) before a seat shows as stuck
 RUN_STATES = ("ok", "error")
 
 
@@ -116,6 +118,14 @@ class Student:
     online: bool = False
     last_run: str | None = None
     passed: set[str] = field(default_factory=set)  # ids of the steps this student has passed
+    hand: int | None = None  # a ticket number while the hand is up; lower numbers went up first
+    crashes: int = 0  # runs in a row that ended in an error
+    misses: int = 0  # checks in a row that did not pass
+    active_at: float = field(default_factory=time.time)  # when they last joined, typed, ran or clicked
+
+    @property
+    def stuck(self) -> bool:
+        return self.crashes >= STUCK_AFTER or self.misses >= STUCK_AFTER
 
 
 @dataclass
@@ -132,6 +142,7 @@ class Classroom:
     current_step: str | None = None  # the step the teacher has pointed the class at
     last_active: float = field(default_factory=time.time)
     dirty: bool = False  # changed since it was last copied to storage
+    next_hand: int = 1  # the ticket the next raised hand gets
 
     @property
     def seat_count(self) -> int:
@@ -160,10 +171,32 @@ class Classroom:
             student = Student(id=secrets.token_urlsafe(16), name=clean)
             self.students[student.id] = student
             self.dirty = True
-        elif student.name != clean:
-            student.name = clean
-            self.dirty = True
+        else:
+            self.active(student)  # coming back counts as doing something
+            if student.name != clean:
+                student.name = clean
+                self.dirty = True
         return student
+
+    def active(self, student: Student) -> bool:
+        """Notes that the student just did something. True if they had been idle until now."""
+        now = time.time()
+        was_idle = now - student.active_at >= STUDENT_IDLE_SECONDS
+        student.active_at = now
+        return was_idle
+
+    def idle_minutes(self, student: Student, now: float) -> int | None:
+        """Whole minutes a seated, online student has done nothing, once that is long enough to count."""
+        if not student.online or student.seat is None:
+            return None
+        quiet = now - student.active_at
+        return int(quiet // 60) if quiet >= STUDENT_IDLE_SECONDS else None
+
+    def idle_marks(self) -> tuple:
+        """Who shows as idle, and for how many minutes. It changes only when the teacher's map would."""
+        now = time.time()
+        marks = ((student.seat, self.idle_minutes(student, now)) for student in self.students.values())
+        return tuple(sorted(mark for mark in marks if mark[1] is not None))
 
     def take_seat(self, student: Student, seat: object) -> None:
         if isinstance(seat, bool) or not isinstance(seat, int) or not 0 <= seat < self.seat_count:
@@ -171,23 +204,55 @@ class Classroom:
         holder = self.student_at(seat)
         if holder is not None and holder is not student:
             raise RoomError("Someone just took that seat. Pick another one.")
+        self.active(student)
         if student.seat != seat:
-            student.seat = seat
+            student.seat = seat  # a raised hand moves with its student
             self.dirty = True
 
     def leave_seat(self, student: Student) -> int | None:
-        """Empties the student's seat and returns which one it was."""
+        """Empties the student's seat and returns which one it was. A raised hand goes down."""
         seat = student.seat
         if seat is not None:
             student.seat = None
+            student.hand = None
+            self.active(student)
             self.dirty = True
         return seat
 
-    def set_source(self, student: Student, text: object) -> None:
+    def set_hand(self, student: Student, up: object) -> None:
+        """Raise or lower a hand. Hands are answered in the order they went up."""
+        if not isinstance(up, bool):
+            raise RoomError("A hand is either up or down.")
+        if up and student.seat is None:
+            raise RoomError("Take a seat before raising your hand.")
+        if up == (student.hand is not None):
+            return
+        if up:
+            student.hand = self.next_hand
+            self.next_hand += 1
+            self.active(student)
+        else:
+            student.hand = None
+        self.dirty = True
+
+    def hand_places(self) -> dict[str, int]:
+        """Each raised hand's place in the queue, by student id: 1 went up first.
+
+        A student who is offline is left out but keeps their ticket, so a reload
+        or a dropped connection does not cost them their place.
+        """
+        waiting = [s for s in self.students.values() if s.seat is not None and s.hand is not None and s.online]
+        waiting.sort(key=lambda student: student.hand)
+        return {student.id: place for place, student in enumerate(waiting, start=1)}
+
+    def set_source(self, student: Student, text: object) -> bool:
+        """Stores the student's code. True if this typing ended an idle spell, so the teacher can be told."""
         source = check_source(text)
-        if student.source != source:
-            student.source = source
-            self.dirty = True
+        if student.source == source:
+            return False
+        student.source = source
+        self.dirty = True
+        return self.active(student)
 
     def set_teacher_source(self, text: object) -> None:
         source = check_source(text)
@@ -199,6 +264,10 @@ class Classroom:
         if status not in RUN_STATES:
             raise RoomError("Unknown run result.")
         student.last_run = status
+        # A run that works ends a streak of crashes. It says nothing about a step's
+        # check, so it leaves the count of missed checks alone.
+        student.crashes = student.crashes + 1 if status == "error" else 0
+        self.active(student)
         self.dirty = True
 
     def step(self, step_id: object) -> Step:
@@ -265,11 +334,17 @@ class Classroom:
         passed = status == "ok" and outputs_match(step.expected_output, output[:MAX_CHECK_OUTPUT])
         if passed:
             student.passed.add(step.id)
+            student.misses = 0
+        else:
+            student.misses += 1
         return passed
 
     def seats(self, for_teacher: bool) -> list[dict]:
-        """Occupied seats. Students see who sits where; only the teacher sees run results."""
+        """Occupied seats. Students see who sits where; the rest is for the teacher only:
+        run results, passes, raised hands, and who looks stuck or idle."""
         result = []
+        places = self.hand_places() if for_teacher else {}
+        now = time.time()
         for student in self.students.values():
             if student.seat is None:
                 continue
@@ -277,6 +352,9 @@ class Classroom:
             if for_teacher:
                 entry["lastRun"] = student.last_run
                 entry["passed"] = self.passed_steps(student)
+                entry["hand"] = places.get(student.id)
+                entry["stuck"] = student.stuck
+                entry["idleMinutes"] = self.idle_minutes(student, now)
             result.append(entry)
         result.sort(key=lambda entry: entry["seat"])
         return result
@@ -301,6 +379,9 @@ class Classroom:
                     "source": student.source,
                     "lastRun": student.last_run,
                     "passed": self.passed_steps(student),
+                    "hand": student.hand,
+                    "crashes": student.crashes,
+                    "misses": student.misses,
                 }
                 for student in self.students.values()
             ],
@@ -340,7 +421,11 @@ class Classroom:
                 source=info.get("source", ""),
                 last_run=info.get("lastRun"),
                 passed=set(info.get("passed", [])),
+                hand=info.get("hand"),
+                crashes=info.get("crashes", 0),
+                misses=info.get("misses", 0),
             )
+        room.next_hand = max((s.hand for s in room.students.values() if s.hand is not None), default=0) + 1
         return room
 
 
@@ -387,6 +472,10 @@ class ClassroomStore:
             room = Classroom.from_record(record)
             self._rooms[key] = room
         return room
+
+    def loaded(self, code: str) -> Classroom | None:
+        """The classroom if it is in memory, without going to storage for it."""
+        return self._rooms.get(code)
 
     def delete(self, code: str) -> None:
         self._rooms.pop(code, None)

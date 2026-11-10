@@ -7,8 +7,8 @@ a "hello" that says who is connecting: a teacher is known by the session cookie
 the browser sends with the connection, a student by a secret id. Secrets never
 travel in a URL.
 
-Messages a student sends:   take_seat, leave_seat, source, run, check
-Messages the teacher sends: source, watch, free_seat, set_steps, set_current_step
+Messages a student sends:   take_seat, leave_seat, source, run, check, hand
+Messages the teacher sends: source, watch, free_seat, lower_hand, set_steps, set_current_step
 Messages the server sends:  welcome, seats, you, teacher_source, student_source, steps, check, error
 """
 
@@ -43,6 +43,7 @@ from .storage import EmailTaken, Storage, TeacherRecord
 
 HELLO_TIMEOUT_SECONDS = 10
 SAVE_EVERY_SECONDS = 2
+PRESENCE_EVERY_SECONDS = 20  # how often teachers are told who has gone idle
 SESSION_COOKIE = "codeseat_session"
 DEFAULT_DATABASE = Path(__file__).resolve().parent.parent / "data" / "codeseat.db"
 
@@ -99,6 +100,9 @@ class Hub:
     def everyone(self, code: str) -> list[Connection]:
         return list(self._rooms.get(code, ()))
 
+    def codes_with_teachers(self) -> list[str]:
+        return [code for code, connections in self._rooms.items() if any(c.is_teacher for c in connections)]
+
     def for_student(self, code: str, student: Student) -> Connection | None:
         for conn in self._rooms.get(code, ()):
             if conn.student is student:
@@ -108,11 +112,12 @@ class Hub:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    keeper = asyncio.create_task(keep_saving())
+    tasks = [asyncio.create_task(keep_saving()), asyncio.create_task(keep_presence())]
     try:
         yield
     finally:
-        keeper.cancel()
+        for task in tasks:
+            task.cancel()
         store.flush()
 
 
@@ -127,10 +132,32 @@ async def keep_saving() -> None:
             log.exception("Saving classrooms failed; will try again")
 
 
+async def keep_presence() -> None:
+    """A student going idle is the passing of time, not a message, so nothing else reports it."""
+    while True:
+        await asyncio.sleep(PRESENCE_EVERY_SECONDS)
+        try:
+            await push_presence()
+        except Exception:
+            log.exception("Telling teachers who is idle failed; will try again")
+
+
+async def push_presence() -> None:
+    """Sends teachers a fresh seat list wherever the idle marks on their map have changed."""
+    watched = hub.codes_with_teachers()
+    for code in [code for code in presence_sent if code not in watched]:
+        del presence_sent[code]
+    for code in watched:
+        room = store.loaded(code)
+        if room is not None and room.idle_marks() != presence_sent.get(code):
+            await broadcast_seats_to_teachers(room)
+
+
 app = FastAPI(title="CodeSeat", lifespan=lifespan)
 store = ClassroomStore(Storage(os.environ.get("CODESEAT_DATABASE", DEFAULT_DATABASE)))
 hub = Hub()
 brake = LoginBrake()
+presence_sent: dict[str, tuple] = {}  # per class, the idle marks teachers were last told about
 
 
 # ---------------------------------------------------------------- teachers
@@ -301,6 +328,7 @@ async def broadcast(connections: list[Connection], message: dict) -> None:
 
 async def broadcast_seats_to_teachers(room: Classroom) -> None:
     message = {"type": "seats", "seats": room.seats(for_teacher=True), "lobby": room.lobby()}
+    presence_sent[room.code] = room.idle_marks()
     await broadcast(hub.teachers(room.code), message)
 
 
@@ -331,8 +359,14 @@ def welcome(room: Classroom, conn: Connection) -> dict:
             "seat": student.seat,
             "source": student.source,
             "passed": room.passed_steps(student),
+            "hand": student.hand is not None,
         }
     return message
+
+
+def seat_and_hand(student: Student) -> dict:
+    """Tells a student where they sit and whether their hand is up; the two change together."""
+    return {"type": "you", "seat": student.seat, "hand": student.hand is not None}
 
 
 def stop_watching(room: Classroom, seat: int) -> None:
@@ -364,22 +398,29 @@ async def handle_student(room: Classroom, conn: Connection, message: dict) -> No
         room.take_seat(student, message.get("seat"))  # a refusal raises and changes nothing
         if previous is not None and previous != student.seat:
             stop_watching(room, previous)
-        await conn.send({"type": "you", "seat": student.seat})
+        await conn.send(seat_and_hand(student))
         await broadcast_seats(room)
 
     elif kind == "leave_seat":
         vacate(room, student)
-        await conn.send({"type": "you", "seat": None})
+        await conn.send(seat_and_hand(student))
         await broadcast_seats(room)
 
     elif kind == "source":
-        room.set_source(student, message.get("text"))
+        back_from_idle = room.set_source(student, message.get("text"))
         if student.seat is not None:
             watchers = [c for c in hub.teachers(room.code) if c.watching == student.seat]
             await broadcast(
                 watchers,
                 {"type": "student_source", "seat": student.seat, "text": student.source},
             )
+            if back_from_idle:
+                await broadcast_seats_to_teachers(room)
+
+    elif kind == "hand":
+        room.set_hand(student, message.get("up"))
+        await conn.send(seat_and_hand(student))
+        await broadcast_seats_to_teachers(room)
 
     elif kind == "run":
         room.record_run(student, message.get("status"))
@@ -421,8 +462,19 @@ async def handle_teacher(room: Classroom, conn: Connection, message: dict) -> No
         vacate(room, student)
         target = hub.for_student(room.code, student)
         if target is not None:
-            await target.send({"type": "you", "seat": None})
+            await target.send(seat_and_hand(student))
         await broadcast_seats(room)
+
+    elif kind == "lower_hand":
+        seat = as_seat(message.get("seat"))
+        student = room.student_at(seat) if seat is not None else None
+        if student is None or student.hand is None:
+            return
+        room.set_hand(student, False)
+        target = hub.for_student(room.code, student)
+        if target is not None:
+            await target.send(seat_and_hand(student))
+        await broadcast_seats_to_teachers(room)
 
     elif kind == "set_steps":
         room.set_steps(message.get("steps"))

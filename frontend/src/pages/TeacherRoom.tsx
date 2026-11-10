@@ -7,7 +7,8 @@ import { RunPanel } from "../components/RunPanel";
 import { SeatMap } from "../components/SeatMap";
 import { TopBar } from "../components/TopBar";
 import { classes } from "../lib/lesson";
-import { type Hello, type Seat, seatLabel } from "../lib/protocol";
+import { type Hello, seatLabel } from "../lib/protocol";
+import { helpQueue, seatWords } from "../lib/seats";
 import { useSession } from "../lib/session";
 import { useClassroom } from "../lib/useClassroom";
 import { usePython } from "../lib/usePython";
@@ -25,13 +26,6 @@ export function TeacherRoom() {
 function parseSeat(value: string | null): number | null {
   if (value === null || !/^\d+$/.test(value)) return null;
   return Number(value);
-}
-
-function stateWords(seat: Seat): string {
-  if (!seat.online) return "Offline";
-  if (seat.lastRun === "error") return "Last run: error";
-  if (seat.lastRun === "ok") return "Last run: fine";
-  return "Not run yet";
 }
 
 function TeacherDesk({ code, teacherName }: { code: string; teacherName: string }) {
@@ -77,6 +71,19 @@ function TeacherDesk({ code, teacherName }: { code: string; teacherName: string 
 
   const watchedText =
     isWatching && classroom.studentSource?.seat === watchedSeat ? classroom.studentSource.text : null;
+
+  // Who needs the teacher: raised hands in order, then students who look stuck.
+  const queue = helpQueue(classroom.seats);
+  const hands = queue.filter((seat) => seat.hand).length;
+
+  // The tab's title counts raised hands, so they show while another tab is in front.
+  useEffect(() => {
+    const plain = document.title.replace(/^\(\d+\) /, "");
+    document.title = hands > 0 ? `(${hands}) ${plain}` : plain;
+    return () => {
+      document.title = plain;
+    };
+  }, [hands]);
 
   const python = usePython();
   const runNow = () => python.run(sourceRef.current);
@@ -251,6 +258,36 @@ function TeacherDesk({ code, teacherName }: { code: string; teacherName: string 
           </section>
 
           <div className="desk__map">
+            {queue.length > 0 && (
+              <section className="help" aria-label="Needs help" aria-live="polite">
+                <h2 className="pane__title">Needs help</h2>
+                <ol className="help__list">
+                  {queue.map((seat) => (
+                    <li key={seat.seat}>
+                      <button
+                        type="button"
+                        className={classes(
+                          "help__item",
+                          !seat.hand && "help__item--stuck",
+                          seat.seat === watchedSeat && "help__item--open",
+                        )}
+                        aria-pressed={seat.seat === watchedSeat}
+                        aria-label={
+                          seat.hand
+                            ? `Hand ${seat.hand}: ${seat.name}, seat ${seatLabel(seat.seat, room.cols)}`
+                            : `Stuck: ${seat.name}, seat ${seatLabel(seat.seat, room.cols)}`
+                        }
+                        onClick={() => setParams({ seat: String(seat.seat) })}
+                      >
+                        <span className="help__place">{seat.hand ? seat.hand : "Stuck"}</span>
+                        <span className="help__name">{seat.name}</span>
+                        <span className="help__seat">{seatLabel(seat.seat, room.cols)}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            )}
             <SeatMap
               rows={room.rows}
               cols={room.cols}
@@ -286,9 +323,18 @@ function TeacherDesk({ code, teacherName }: { code: string; teacherName: string 
                         ))}
                       </ol>
                     )}
-                    <span className="status" role="status">
-                      {stateWords(watched)}
+                    <span className={watched.online && watched.hand ? "status status--warn" : "status"} role="status">
+                      {seatWords(watched)}
                     </span>
+                    {watched.hand != null && (
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => send({ type: "lower_hand", seat: watchedSeat })}
+                      >
+                        Lower hand
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="btn"

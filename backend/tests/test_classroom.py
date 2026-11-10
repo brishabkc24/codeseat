@@ -11,7 +11,16 @@ from starlette.websockets import WebSocketDisconnect
 
 from app import main
 from app.accounts import LOGIN_ATTEMPTS, LOGIN_WINDOW_SECONDS, LoginBrake, check_password, hash_password
-from app.rooms import IDLE_SECONDS, MAX_STEPS, ClassroomStore, RoomError, outputs_match
+from app.rooms import (
+    IDLE_SECONDS,
+    MAX_STEPS,
+    STUCK_AFTER,
+    STUDENT_IDLE_SECONDS,
+    Classroom,
+    ClassroomStore,
+    RoomError,
+    outputs_match,
+)
 from app.storage import Storage, TeacherRecord
 
 
@@ -20,8 +29,24 @@ def client():
     main.store = ClassroomStore(Storage(":memory:"))
     main.hub = main.Hub()
     main.brake = LoginBrake()
+    main.presence_sent = {}
     with TestClient(main.app) as test_client:
         yield test_client
+
+
+def teacher_seat(seat, name, **changes):
+    """A seat as the teacher is sent it, for a student who is online and has done nothing yet."""
+    entry = {
+        "seat": seat,
+        "name": name,
+        "online": True,
+        "lastRun": None,
+        "passed": [],
+        "hand": None,
+        "stuck": False,
+        "idleMinutes": None,
+    }
+    return {**entry, **changes}
 
 
 TEACHER = {"name": "Ms Rai", "email": "rai@example.com", "password": "correct horse battery"}
@@ -163,7 +188,7 @@ def test_student_takes_a_seat_and_others_see_it(client):
     room = open_class(client)
     with student(client, room["code"], "Asha") as asha, student(client, room["code"], "Bikram") as bikram:
         assert asha.welcome["you"]["seat"] is None
-        assert sit(asha, 4) == {"type": "you", "seat": 4}
+        assert sit(asha, 4) == {"type": "you", "seat": 4, "hand": False}
 
         seats = next_of(bikram, "seats")
         while not seats["seats"]:  # skip the updates from the two of them connecting
@@ -203,6 +228,7 @@ def test_rejoining_keeps_the_seat_and_the_code(client):
             "seat": 2,
             "source": "print('hi')",
             "passed": [],
+            "hand": False,
         }
 
 
@@ -216,7 +242,7 @@ def test_seat_shows_offline_after_the_student_disconnects(client):
                 seats = next_of(desk, "seats")
             assert seats["seats"][0]["online"] is True
         seats = next_of(desk, "seats")
-        assert seats["seats"] == [{"seat": 0, "name": "Asha", "online": False, "lastRun": None, "passed": []}]
+        assert seats["seats"] == [teacher_seat(0, "Asha", online=False)]
 
 
 # ---------------------------------------------------------------- live code
@@ -299,13 +325,13 @@ def test_run_results_go_to_the_teacher_only(client):
         seats = next_of(desk, "seats")
         while not any(seat.get("lastRun") for seat in seats["seats"]):
             seats = next_of(desk, "seats")
-        assert seats["seats"][0] == {"seat": 0, "name": "Asha", "online": True, "lastRun": "error", "passed": []}
+        assert seats["seats"][0] == teacher_seat(0, "Asha", lastRun="error")
         assert seats["lobby"] == []
 
         bikram.send_json({"type": "leave_seat"})
         assert next_of(bikram, "you")["seat"] is None
         for seat in next_of(bikram, "seats")["seats"]:
-            assert "lastRun" not in seat
+            assert set(seat) == {"seat", "name", "online"}  # nothing a classmate should not see
 
 
 def test_students_cannot_use_teacher_messages(client):
@@ -313,12 +339,16 @@ def test_students_cannot_use_teacher_messages(client):
     with student(client, room["code"], "Asha") as asha, student(client, room["code"], "Bikram") as bikram:
         sit(asha, 0)
         sit(bikram, 1)
+        asha.send_json({"type": "hand", "up": True})
+        assert next_of(asha, "you")["hand"] is True
         bikram.send_json({"type": "free_seat", "seat": 0})
         bikram.send_json({"type": "watch", "seat": 0})
+        bikram.send_json({"type": "lower_hand", "seat": 0})
         bikram.send_json({"type": "set_steps", "steps": [STEP]})
         bikram.send_json({"type": "set_current_step", "step": None})
         assert sit(bikram, 1)["seat"] == 1  # still served, and the messages above did nothing
         assert main.store.get(room["code"]).student_at(0).name == "Asha"
+        assert main.store.get(room["code"]).student_at(0).hand is not None
         assert main.store.get(room["code"]).steps == []
 
 
@@ -327,7 +357,7 @@ def test_teacher_can_free_a_seat(client):
     with teacher(client, room) as desk, student(client, room["code"], "Asha") as asha:
         sit(asha, 5)
         desk.send_json({"type": "free_seat", "seat": 5})
-        assert next_of(asha, "you") == {"type": "you", "seat": None}
+        assert next_of(asha, "you") == {"type": "you", "seat": None, "hand": False}
         assert main.store.get(room["code"]).student_at(5) is None
 
 
@@ -389,7 +419,7 @@ def test_a_check_passes_on_the_expected_output_and_the_teacher_sees_it(client):
         verdict = check(asha, hello["id"], "Hello, world!   \r\n\n")
         assert verdict == {"type": "check", "step": hello["id"], "passed": True}
         seats = seats_with(desk, lambda seats: seats and seats[0]["passed"])
-        assert seats[0] == {"seat": 0, "name": "Asha", "online": True, "lastRun": "ok", "passed": [hello["id"]]}
+        assert seats[0] == teacher_seat(0, "Asha", lastRun="ok", passed=[hello["id"]])
 
         assert check(asha, total["id"], "8")["passed"] is False
         assert check(asha, total["id"], "7\n", status="error")["passed"] is False  # a crash never passes
@@ -411,8 +441,7 @@ def test_students_never_see_who_passed(client):
         sit(asha, 0)
         check(asha, hello["id"], "Hello, world!")
         with student(client, room["code"], "Bikram") as bikram:
-            for seat in bikram.welcome["seats"]:
-                assert "passed" not in seat and "lastRun" not in seat
+            assert bikram.welcome["seats"] == [{"seat": 0, "name": "Asha", "online": True}]
 
 
 def test_checking_an_unknown_step_is_an_error(client):
@@ -481,6 +510,153 @@ def test_teacher_points_the_class_at_a_step(client):
 )
 def test_outputs_match_rules(expected, actual, same):
     assert outputs_match(expected, actual) is same
+
+
+# ---------------------------------------------------------------- who needs help
+
+
+def test_raised_hands_queue_up_for_the_teacher_in_order(client):
+    room = open_class(client)
+    with (
+        teacher(client, room) as desk,
+        student(client, room["code"], "Asha") as asha,
+        student(client, room["code"], "Bikram") as bikram,
+    ):
+        sit(asha, 0)
+        sit(bikram, 1)
+        bikram.send_json({"type": "hand", "up": True})
+        assert next_of(bikram, "you") == {"type": "you", "seat": 1, "hand": True}
+        asha.send_json({"type": "hand", "up": True})
+        assert next_of(asha, "you") == {"type": "you", "seat": 0, "hand": True}
+
+        seats = seats_with(desk, lambda seats: len(seats) == 2 and all(seat["hand"] for seat in seats))
+        assert [seat["hand"] for seat in seats] == [2, 1]  # Bikram's went up first
+
+        # Classmates see who sits where, never whose hand is up.
+        with student(client, room["code"], "Chandra") as chandra:
+            assert all(set(seat) == {"seat", "name", "online"} for seat in chandra.welcome["seats"])
+
+        # The first hand comes down and the queue moves up.
+        bikram.send_json({"type": "hand", "up": False})
+        assert next_of(bikram, "you")["hand"] is False
+        seats = seats_with(desk, lambda seats: len(seats) == 2 and seats[1]["hand"] is None)
+        assert seats[0]["hand"] == 1
+
+        # The teacher lowers the other one after helping, and the student is told.
+        desk.send_json({"type": "lower_hand", "seat": 0})
+        assert next_of(asha, "you") == {"type": "you", "seat": 0, "hand": False}
+        seats = seats_with(desk, lambda seats: len(seats) == 2 and seats[0]["hand"] is None)
+        assert [seat["hand"] for seat in seats] == [None, None]
+
+
+def test_a_hand_needs_a_seat_and_comes_down_when_the_seat_is_left(client):
+    room = open_class(client)
+    with student(client, room["code"], "Asha") as asha:
+        asha.send_json({"type": "hand", "up": True})
+        assert next_of(asha, "error")["message"] == "Take a seat before raising your hand."
+
+        sit(asha, 0)
+        asha.send_json({"type": "hand", "up": "yes"})
+        assert next_of(asha, "error")["message"] == "A hand is either up or down."
+        asha.send_json({"type": "hand", "up": True})
+        assert next_of(asha, "you")["hand"] is True
+
+        # Moving to another seat keeps the hand up; leaving the seats lowers it.
+        assert sit(asha, 3) == {"type": "you", "seat": 3, "hand": True}
+        asha.send_json({"type": "leave_seat"})
+        assert next_of(asha, "you") == {"type": "you", "seat": None, "hand": False}
+
+
+def test_a_run_of_failures_marks_the_seat_as_stuck(client):
+    room = open_class(client)
+    with teacher(client, room) as desk, student(client, room["code"], "Asha") as asha:
+        (hello,) = set_steps(desk, [STEP])["steps"]
+        sit(asha, 0)
+
+        def stuck():
+            return main.store.get(room["code"]).student_at(0).stuck
+
+        def round_trip():
+            sit(asha, 0)  # answered in order, so everything sent before it has been handled
+
+        # Checks that do not pass add up, and a run that merely works does not excuse them.
+        for _ in range(STUCK_AFTER - 1):
+            check(asha, hello["id"], "Hello")
+        assert not stuck()
+        asha.send_json({"type": "run", "status": "ok"})
+        check(asha, hello["id"], "Hello")
+        assert stuck()
+        seats = seats_with(desk, lambda seats: bool(seats) and seats[0]["stuck"])
+        assert seats[0] == teacher_seat(0, "Asha", lastRun="ok", stuck=True)
+
+        # Passing the step clears it.
+        assert check(asha, hello["id"], "Hello, world!")["passed"] is True
+        assert not stuck()
+
+        # Crashes add up on their own, and one run that works ends them.
+        for _ in range(STUCK_AFTER):
+            asha.send_json({"type": "run", "status": "error"})
+        round_trip()
+        assert stuck()
+        asha.send_json({"type": "run", "status": "ok"})
+        round_trip()
+        assert not stuck()
+
+
+def test_a_quiet_student_shows_as_idle_until_they_type_again(client):
+    room = open_class(client)
+    with teacher(client, room) as desk, student(client, room["code"], "Asha") as asha:
+        sit(asha, 0)
+        seats = seats_with(desk, lambda seats: len(seats) == 1)
+        assert seats[0]["idleMinutes"] is None
+
+        # Four minutes and a bit without typing, running or clicking.
+        main.store.get(room["code"]).student_at(0).active_at -= STUDENT_IDLE_SECONDS + 65
+        client.portal.call(main.push_presence)
+        assert next_of(desk, "seats")["seats"] == [teacher_seat(0, "Asha", idleMinutes=4)]
+
+        # With nothing new to tell, a second push says nothing: the next seat list
+        # the teacher gets is the one sent because Asha started typing again.
+        client.portal.call(main.push_presence)
+        asha.send_json({"type": "source", "text": "x = 1"})
+        assert next_of(desk, "seats")["seats"] == [teacher_seat(0, "Asha")]
+
+
+def test_idle_is_only_for_students_who_are_seated_and_online():
+    room = bare_store().create("t1", "Intro", 1, 2)
+    asha = room.join(None, "Asha")
+    asha.active_at -= STUDENT_IDLE_SECONDS + 1
+    now = asha.active_at + STUDENT_IDLE_SECONDS + 1
+
+    assert room.idle_minutes(asha, now) is None  # not seated, not online
+    asha.seat = 0
+    assert room.idle_minutes(asha, now) is None  # seated, but offline
+    asha.online = True
+    assert room.idle_minutes(asha, now) == 3
+    assert room.idle_minutes(asha, now - 2) is None  # just under the limit
+    assert room.idle_marks() == ((0, 3),)
+
+    assert room.active(asha) is True  # doing something ends the idle spell, and says so once
+    assert room.active(asha) is False
+    assert room.idle_marks() == ()
+
+
+def test_hand_tickets_carry_on_after_a_reload():
+    room = bare_store().create("t1", "Intro", 1, 3)
+    asha, bikram, chandra = (room.join(None, name) for name in ("Asha", "Bikram", "Chandra"))
+    for seat, person in enumerate((asha, bikram, chandra)):
+        room.take_seat(person, seat)
+    room.set_hand(asha, True)
+    room.set_hand(bikram, True)
+    room.set_hand(asha, False)
+
+    again = Classroom.from_record(room.record())
+    again.set_hand(again.students[chandra.id], True)
+    again.set_hand(again.students[asha.id], True)
+    assert again.hand_places() == {}  # nobody has reconnected yet
+    for person in again.students.values():
+        person.online = True
+    assert again.hand_places() == {bikram.id: 1, chandra.id: 2, asha.id: 3}
 
 
 # ---------------------------------------------------------------- teacher accounts
@@ -622,6 +798,8 @@ def test_a_class_survives_a_server_restart(client):
         sit(asha, 4)
         asha.send_json({"type": "source", "text": "print('hi')"})
         check(asha, hello["id"], "Hello, world!")
+        asha.send_json({"type": "hand", "up": True})
+        assert next_of(asha, "you")["hand"] is True
         student_id = asha.welcome["you"]["id"]
 
     # A new store over the same database is what a restarted server sees.
@@ -631,12 +809,15 @@ def test_a_class_survives_a_server_restart(client):
         assert back.welcome["you"]["seat"] == 4
         assert back.welcome["you"]["source"] == "print('hi')"
         assert back.welcome["you"]["passed"] == [hello["id"]]
+        assert back.welcome["you"]["hand"] is True
         assert back.welcome["teacherSource"] == "# lesson 1"
         assert back.welcome["steps"][0]["id"] == hello["id"]
+        with teacher(client, room) as desk:
+            assert desk.welcome["seats"] == [teacher_seat(4, "Asha", lastRun="ok", passed=[hello["id"]], hand=1)]
+    # Once she is offline her hand leaves the queue, though she keeps her place in it.
     with teacher(client, room) as desk:
-        assert desk.welcome["seats"] == [
-            {"seat": 4, "name": "Asha", "online": False, "lastRun": "ok", "passed": [hello["id"]]}
-        ]
+        assert desk.welcome["seats"] == [teacher_seat(4, "Asha", online=False, lastRun="ok", passed=[hello["id"]])]
+    assert main.store.get(room["code"]).student_at(4).hand == 1
     listed = client.get("/api/classes").json()["classes"][0]
     assert (listed["students"], listed["steps"]) == (1, 1)
 
