@@ -13,6 +13,7 @@ from app import main
 from app.accounts import LOGIN_ATTEMPTS, LOGIN_WINDOW_SECONDS, LoginBrake, check_password, hash_password
 from app.rooms import (
     IDLE_SECONDS,
+    MAX_HINT,
     MAX_STEPS,
     STUCK_AFTER,
     STUDENT_IDLE_SECONDS,
@@ -45,6 +46,7 @@ def teacher_seat(seat, name, **changes):
         "hand": None,
         "stuck": False,
         "idleMinutes": None,
+        "hint": None,
     }
     return {**entry, **changes}
 
@@ -229,6 +231,7 @@ def test_rejoining_keeps_the_seat_and_the_code(client):
             "source": "print('hi')",
             "passed": [],
             "hand": False,
+            "hint": "",
         }
 
 
@@ -344,11 +347,13 @@ def test_students_cannot_use_teacher_messages(client):
         bikram.send_json({"type": "free_seat", "seat": 0})
         bikram.send_json({"type": "watch", "seat": 0})
         bikram.send_json({"type": "lower_hand", "seat": 0})
+        bikram.send_json({"type": "hint", "seat": 0, "text": "copy mine"})
         bikram.send_json({"type": "set_steps", "steps": [STEP]})
         bikram.send_json({"type": "set_current_step", "step": None})
         assert sit(bikram, 1)["seat"] == 1  # still served, and the messages above did nothing
         assert main.store.get(room["code"]).student_at(0).name == "Asha"
         assert main.store.get(room["code"]).student_at(0).hand is not None
+        assert main.store.get(room["code"]).student_at(0).hint == ""
         assert main.store.get(room["code"]).steps == []
 
 
@@ -620,6 +625,57 @@ def test_a_quiet_student_shows_as_idle_until_they_type_again(client):
         client.portal.call(main.push_presence)
         asha.send_json({"type": "source", "text": "x = 1"})
         assert next_of(desk, "seats")["seats"] == [teacher_seat(0, "Asha")]
+
+
+def test_teacher_sends_a_hint_to_one_seat(client):
+    room = open_class(client)
+    with (
+        teacher(client, room) as desk,
+        student(client, room["code"], "Asha") as asha,
+        student(client, room["code"], "Bikram") as bikram,
+    ):
+        sit(asha, 0)
+        sit(bikram, 1)
+        desk.send_json({"type": "hint", "seat": 0, "text": "  Check the colon\r\non line 2.  "})
+        assert next_of(asha, "you") == {"type": "you", "hint": "Check the colon\non line 2."}
+        seats = seats_with(desk, lambda seats: len(seats) == 2 and seats[0]["hint"])
+        assert seats == [teacher_seat(0, "Asha", hint="Check the colon\non line 2."), teacher_seat(1, "Bikram")]
+
+        # It is for Asha alone: Bikram is sent nothing, and no seat list he gets mentions it.
+        assert sit(bikram, 1) == {"type": "you", "seat": 1, "hand": False}
+        assert all(set(seat) == {"seat", "name", "online"} for seat in next_of(bikram, "seats")["seats"])
+
+        # A new hint replaces the old one; it is still there after a reload.
+        desk.send_json({"type": "hint", "seat": 0, "text": "Indent the print."})
+        assert next_of(asha, "you")["hint"] == "Indent the print."
+        student_id = asha.welcome["you"]["id"]
+        with student(client, room["code"], "Asha", student_id) as again:
+            assert again.welcome["you"]["hint"] == "Indent the print."
+
+            # The student puts it away, and the teacher sees that it is gone.
+            again.send_json({"type": "dismiss_hint"})
+            assert next_of(again, "you") == {"type": "you", "hint": ""}
+            seats = seats_with(desk, lambda seats: len(seats) == 2 and seats[0]["online"] and not seats[0]["hint"])
+            assert seats[0]["hint"] is None
+
+            # The teacher can take a hint back by sending a blank one.
+            desk.send_json({"type": "hint", "seat": 0, "text": "Oops"})
+            assert next_of(again, "you")["hint"] == "Oops"
+            desk.send_json({"type": "hint", "seat": 0, "text": "   "})
+            assert next_of(again, "you")["hint"] == ""
+
+
+def test_a_hint_needs_a_student_and_has_a_length_limit(client):
+    room = open_class(client)
+    with teacher(client, room) as desk, student(client, room["code"], "Asha") as asha:
+        sit(asha, 0)
+        desk.send_json({"type": "hint", "seat": 3, "text": "Hello?"})
+        assert next_of(desk, "error")["message"] == "Nobody is sitting in that seat."
+        desk.send_json({"type": "hint", "seat": 0, "text": "x" * (MAX_HINT + 1)})
+        assert next_of(desk, "error")["message"] == f"The hint is too long (at most {MAX_HINT} characters)."
+        desk.send_json({"type": "hint", "seat": 0, "text": 7})
+        assert next_of(desk, "error")["message"] == "The hint must be text."
+        assert main.store.get(room["code"]).student_at(0).hint == ""
 
 
 def test_idle_is_only_for_students_who_are_seated_and_online():

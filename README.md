@@ -27,6 +27,9 @@ Milestone 2, lesson steps, works locally:
 - A pass shows on the student's list, as a count on their seat on the teacher's map,
   and step by step when the teacher opens that seat
 - The teacher can point the class at a step, marked "Now" on every screen
+- Ten ready-made first lessons (print, variables, input, numbers, if, elif, for,
+  while, lists, functions) load into the lesson editor in one click and can be changed
+  before saving. Each of their 38 steps is tested against a reference solution
 
 Milestone 3, teacher accounts and saved classes, works locally:
 
@@ -43,6 +46,8 @@ The teacher also sees who needs help:
   went up, the seat fills with the signal colour, and the tab's title counts them
 - A seat shows "Stuck" after three failed tries in a row (crashes, or checks that did
   not pass) and "Idle" after three minutes without typing, running or clicking
+- The teacher can send a short hint to one seat. It appears above that student's
+  editor until they put it away or the teacher takes it back
 - Only the teacher sees any of this; classmates see who sits where and nothing more
 
 CodeSeat is also an installable web app: browsers that allow it show an "Install app"

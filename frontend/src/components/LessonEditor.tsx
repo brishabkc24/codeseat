@@ -1,5 +1,11 @@
 import { type FormEvent, useState } from "react";
+import starterLessons from "../data/starter-lessons.json";
 import type { Step } from "../lib/protocol";
+
+/** A ready-made lesson a teacher can load and then change (src/data/starter-lessons.json). */
+type StarterLesson = { id: string; title: string; summary: string; steps: Omit<Step, "id">[] };
+
+const LIBRARY = starterLessons as StarterLesson[];
 
 /** A step as sent to the server: an existing step keeps its id, a new one has none. */
 export type StepDraft = Omit<Step, "id"> & { id?: string };
@@ -32,10 +38,32 @@ function incomplete(draft: Draft): boolean {
   return draft.title.trim() === "" || draft.expectedOutput.trim() === "";
 }
 
+function written(draft: Draft): boolean {
+  return [draft.title, draft.instructions, draft.input, draft.expectedOutput].some((text) => text.trim() !== "");
+}
+
 /** The teacher's form for the lesson: every step with its task, input and expected output. */
 export function LessonEditor({ steps, saving, notice, onSave, onCancel }: Props) {
   const [drafts, setDrafts] = useState<Draft[]>(() => (steps.length > 0 ? steps.map(fromStep) : [blank()]));
   const [tried, setTried] = useState(false);
+
+  // The ready-made lessons are open when there is nothing written yet. Loading one
+  // over steps that hold text takes a second click, so a slip cannot lose them.
+  const [browsing, setBrowsing] = useState(steps.length === 0);
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState("");
+  const load = (lesson: StarterLesson) => {
+    setDrafts(
+      lesson.steps.map((step) => {
+        nextKey += 1;
+        return { ...step, key: nextKey };
+      }),
+    );
+    setTried(false);
+    setConfirming(null);
+    setBrowsing(false);
+    setLoaded(lesson.title);
+  };
 
   const patch = (key: number, change: Partial<StepDraft>) =>
     setDrafts((current) => current.map((draft) => (draft.key === key ? { ...draft, ...change } : draft)));
@@ -86,6 +114,64 @@ export function LessonEditor({ steps, saving, notice, onSave, onCancel }: Props)
           Every step needs a title and an expected output.
         </p>
       )}
+
+      <section className="library" aria-labelledby="library-title">
+        <div className="library__head">
+          <h3 id="library-title" className="library__title">
+            Ready-made lessons
+          </h3>
+          <button type="button" className="btn" aria-expanded={browsing} onClick={() => setBrowsing(!browsing)}>
+            {browsing ? "Hide" : "Show"}
+          </button>
+        </div>
+        {loaded && !browsing && (
+          <p className="library__note" role="status">
+            Loaded “{loaded}”. Change anything you like below, then save.
+          </p>
+        )}
+        {browsing && (
+          <>
+            <p className="library__note">
+              Ten first lessons in Python, in teaching order. Loading one fills in the steps below, where you
+              can change anything before saving.
+            </p>
+            <ul className="courses">
+              {LIBRARY.map((lesson) => (
+                <li key={lesson.id} className="course">
+                  <div className="course__about">
+                    <h4 className="course__title">{lesson.title}</h4>
+                    <p className="course__meta">
+                      {lesson.summary} {lesson.steps.length} steps.
+                    </p>
+                  </div>
+                  <div className="course__actions">
+                    {confirming === lesson.id ? (
+                      <>
+                        <span className="status status--warn">Replace the steps you have written?</span>
+                        <button type="button" className="btn" onClick={() => load(lesson)}>
+                          Yes, replace
+                        </button>
+                        <button type="button" className="btn" onClick={() => setConfirming(null)}>
+                          Keep mine
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn"
+                        aria-label={`Use the lesson ${lesson.title}`}
+                        onClick={() => (drafts.some(written) ? setConfirming(lesson.id) : load(lesson))}
+                      >
+                        Use this lesson
+                      </button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </section>
 
       {drafts.length === 0 ? (
         <p className="lesson-editor__none">No steps. Saving now clears the lesson.</p>

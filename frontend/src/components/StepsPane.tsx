@@ -98,19 +98,51 @@ export function StepsPane({
               Runs your code{selected.input ? " with the input above" : ""} and compares what it prints.
             </p>
           </div>
-          {verdict && <VerdictNote step={selected} verdict={verdict} />}
+          {verdict && (
+            <VerdictNote
+              step={selected}
+              verdict={verdict}
+              next={nextStep(steps, passed, selected)}
+              nextNumber={(id) => stepNumber(steps, id)}
+              onSelect={onSelect}
+            />
+          )}
         </article>
       </div>
     </section>
   );
 }
 
-function VerdictNote({ step, verdict }: { step: Step; verdict: Verdict }) {
+/** Where to go after a pass: the next step not yet passed, looking after this one first. */
+function nextStep(steps: Step[], passed: string[], current: Step): Step | null {
+  const at = steps.findIndex((step) => step.id === current.id);
+  const open = (step: Step) => step.id !== current.id && !passed.includes(step.id);
+  return steps.slice(at + 1).find(open) ?? steps.slice(0, at).find(open) ?? null;
+}
+
+type VerdictProps = {
+  step: Step;
+  verdict: Verdict;
+  next: Step | null;
+  nextNumber: (id: string) => number;
+  onSelect: (id: string) => void;
+};
+
+function VerdictNote({ step, verdict, next, nextNumber, onSelect }: VerdictProps) {
   if (verdict.passed) {
     return (
-      <p className="task__verdict task__verdict--ok" role="status">
-        Passed. Your program printed what this step asks for.
-      </p>
+      <div className="task__verdict task__verdict--ok task__verdict--row" role="status">
+        <p>
+          {next
+            ? "Passed. Your program printed what this step asks for."
+            : "Passed. That was the last one: every step is done."}
+        </p>
+        {next && (
+          <button type="button" className="btn" onClick={() => onSelect(next.id)}>
+            Next: step {nextNumber(next.id)}
+          </button>
+        )}
+      </div>
     );
   }
   if (verdict.result === "error") {

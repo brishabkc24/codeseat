@@ -7,8 +7,8 @@ a "hello" that says who is connecting: a teacher is known by the session cookie
 the browser sends with the connection, a student by a secret id. Secrets never
 travel in a URL.
 
-Messages a student sends:   take_seat, leave_seat, source, run, check, hand
-Messages the teacher sends: source, watch, free_seat, lower_hand, set_steps, set_current_step
+Messages a student sends:   take_seat, leave_seat, source, run, check, hand, dismiss_hint
+Messages the teacher sends: source, watch, free_seat, lower_hand, hint, set_steps, set_current_step
 Messages the server sends:  welcome, seats, you, teacher_source, student_source, steps, check, error
 """
 
@@ -360,6 +360,7 @@ def welcome(room: Classroom, conn: Connection) -> dict:
             "source": student.source,
             "passed": room.passed_steps(student),
             "hand": student.hand is not None,
+            "hint": student.hint,
         }
     return message
 
@@ -422,6 +423,11 @@ async def handle_student(room: Classroom, conn: Connection, message: dict) -> No
         await conn.send(seat_and_hand(student))
         await broadcast_seats_to_teachers(room)
 
+    elif kind == "dismiss_hint":
+        room.set_hint(student, "")
+        await conn.send({"type": "you", "hint": student.hint})
+        await broadcast_seats_to_teachers(room)
+
     elif kind == "run":
         room.record_run(student, message.get("status"))
         await broadcast_seats_to_teachers(room)
@@ -474,6 +480,17 @@ async def handle_teacher(room: Classroom, conn: Connection, message: dict) -> No
         target = hub.for_student(room.code, student)
         if target is not None:
             await target.send(seat_and_hand(student))
+        await broadcast_seats_to_teachers(room)
+
+    elif kind == "hint":
+        seat = as_seat(message.get("seat"))
+        student = room.student_at(seat) if seat is not None else None
+        if student is None:
+            raise RoomError("Nobody is sitting in that seat.")
+        room.set_hint(student, message.get("text"))
+        target = hub.for_student(room.code, student)
+        if target is not None:
+            await target.send({"type": "you", "hint": student.hint})
         await broadcast_seats_to_teachers(room)
 
     elif kind == "set_steps":

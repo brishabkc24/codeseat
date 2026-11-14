@@ -1,0 +1,300 @@
+[
+  {
+    "id": "print",
+    "title": "1. Say it with print",
+    "summary": "The first program: making Python show text and numbers.",
+    "steps": [
+      {
+        "title": "Say hello",
+        "instructions": "Use print() to show the greeting below, exactly as written.",
+        "input": "",
+        "expectedOutput": "Hello, world!"
+      },
+      {
+        "title": "Two lines",
+        "instructions": "Each print() starts a new line. Print the two lines below with two print() calls.",
+        "input": "",
+        "expectedOutput": "Python\nis fun"
+      },
+      {
+        "title": "Let Python do the sum",
+        "instructions": "print() can show the result of a calculation. Print the result of 2 + 3 without typing the answer yourself.",
+        "input": "",
+        "expectedOutput": "5"
+      },
+      {
+        "title": "Words and a number together",
+        "instructions": "Give print() several things separated by commas and it puts a space between them. Print the sentence below using the text \"I am\", the number 12 and the text \"years old\".",
+        "input": "",
+        "expectedOutput": "I am 12 years old"
+      }
+    ]
+  },
+  {
+    "id": "variables",
+    "title": "2. Variables",
+    "summary": "Giving a value a name, using it, and changing it.",
+    "steps": [
+      {
+        "title": "Store a name",
+        "instructions": "Make a variable called name that holds the text \"Asha\". Then print the variable.",
+        "input": "",
+        "expectedOutput": "Asha"
+      },
+      {
+        "title": "Use it in a sentence",
+        "instructions": "Keep the variable name from the last step. Print a greeting that uses it, so the output is the line below.",
+        "input": "",
+        "expectedOutput": "Hello, Asha"
+      },
+      {
+        "title": "Numbers in variables",
+        "instructions": "Make price = 40 and count = 3. Print the total cost, which is price times count. Use * to multiply.",
+        "input": "",
+        "expectedOutput": "120"
+      },
+      {
+        "title": "Change a variable",
+        "instructions": "Start with score = 10. Add 5 to score, then print score.",
+        "input": "",
+        "expectedOutput": "15"
+      }
+    ]
+  },
+  {
+    "id": "input",
+    "title": "3. Asking with input",
+    "summary": "Reading what the user types and answering with it.",
+    "steps": [
+      {
+        "title": "Repeat what was typed",
+        "instructions": "input() waits for a line of text and gives it back. Read one line into a variable and print it.",
+        "input": "Bikram\n",
+        "expectedOutput": "Bikram"
+      },
+      {
+        "title": "Greet by name",
+        "instructions": "Read a name with input(). Print a greeting for that name, ending with an exclamation mark, like the line below. Do not put a question inside input() for this step, because that text would be printed too.",
+        "input": "Bikram\n",
+        "expectedOutput": "Hello, Bikram!"
+      },
+      {
+        "title": "Two answers",
+        "instructions": "Read a city, then a country, with two input() calls. Print them on one line with a comma and a space between them.",
+        "input": "Pokhara\nNepal\n",
+        "expectedOutput": "Pokhara, Nepal"
+      }
+    ]
+  },
+  {
+    "id": "numbers",
+    "title": "4. Numbers and sums",
+    "summary": "Turning typed text into numbers and calculating with them.",
+    "steps": [
+      {
+        "title": "Add two numbers",
+        "instructions": "input() always gives text. Wrap it in int() to get a whole number. Read two whole numbers and print their sum.",
+        "input": "3\n4\n",
+        "expectedOutput": "7"
+      },
+      {
+        "title": "Area of a rectangle",
+        "instructions": "Read the width, then the height, as whole numbers. Print the area, which is width times height.",
+        "input": "6\n5\n",
+        "expectedOutput": "30"
+      },
+      {
+        "title": "Average of three",
+        "instructions": "Read three whole numbers. Print their average: add them and divide by 3 with /. Dividing with / always gives a decimal number, so 7 shows as 7.0.",
+        "input": "4\n8\n9\n",
+        "expectedOutput": "7.0"
+      },
+      {
+        "title": "What is left over",
+        "instructions": "The % sign gives the remainder of a division. Read a whole number and print the remainder when it is divided by 2.",
+        "input": "7\n",
+        "expectedOutput": "1"
+      }
+    ]
+  },
+  {
+    "id": "if-else",
+    "title": "5. Choosing with if and else",
+    "summary": "Making the program do one thing or another.",
+    "steps": [
+      {
+        "title": "Pass or fail",
+        "instructions": "Read marks as a whole number. If the marks are 40 or more print Pass, otherwise print Fail. Use >= for \"or more\".",
+        "input": "55\n",
+        "expectedOutput": "Pass"
+      },
+      {
+        "title": "The other side",
+        "instructions": "Do not change your program. Check it again here, where the marks are 20. A program that only ever prints Pass will not get through this step.",
+        "input": "20\n",
+        "expectedOutput": "Fail"
+      },
+      {
+        "title": "Even or odd",
+        "instructions": "Read a whole number. Print Even if it divides by 2 with nothing left over, otherwise print Odd. The remainder sign % from the last lesson helps.",
+        "input": "8\n",
+        "expectedOutput": "Even"
+      },
+      {
+        "title": "The bigger one",
+        "instructions": "Read two whole numbers. Print the bigger of the two.",
+        "input": "12\n30\n",
+        "expectedOutput": "30"
+      }
+    ]
+  },
+  {
+    "id": "elif",
+    "title": "6. More than two choices",
+    "summary": "Using elif when there are several cases.",
+    "steps": [
+      {
+        "title": "A grade for the marks",
+        "instructions": "Read marks as a whole number and print a grade: A for 80 or more, B for 60 or more, C for 40 or more, and F for anything lower. Use if, then elif for each next case, then else.",
+        "input": "85\n",
+        "expectedOutput": "A"
+      },
+      {
+        "title": "The same program, other marks",
+        "instructions": "Do not change your program. This time the marks are 65.",
+        "input": "65\n",
+        "expectedOutput": "B"
+      },
+      {
+        "title": "And the lowest grade",
+        "instructions": "Still the same program. This time the marks are 10.",
+        "input": "10\n",
+        "expectedOutput": "F"
+      },
+      {
+        "title": "Positive, negative or zero",
+        "instructions": "Read a whole number. Print Positive if it is more than 0, Negative if it is less than 0, and Zero if it is 0.",
+        "input": "-4\n",
+        "expectedOutput": "Negative"
+      }
+    ]
+  },
+  {
+    "id": "for",
+    "title": "7. Repeating with for",
+    "summary": "Doing something a set number of times with for and range.",
+    "steps": [
+      {
+        "title": "Count to five",
+        "instructions": "Print the numbers 1 to 5, one on each line, using a for loop. range(1, 6) gives the numbers 1, 2, 3, 4, 5: it stops before 6.",
+        "input": "",
+        "expectedOutput": "1\n2\n3\n4\n5"
+      },
+      {
+        "title": "Count as far as asked",
+        "instructions": "Read a whole number n. Print the numbers from 1 to n, one on each line.",
+        "input": "3\n",
+        "expectedOutput": "1\n2\n3"
+      },
+      {
+        "title": "A times table",
+        "instructions": "Read a whole number. Print the first five lines of its times table, in the form shown below.",
+        "input": "7\n",
+        "expectedOutput": "7 x 1 = 7\n7 x 2 = 14\n7 x 3 = 21\n7 x 4 = 28\n7 x 5 = 35"
+      },
+      {
+        "title": "Add them all up",
+        "instructions": "Read a whole number n. Print the sum of all the numbers from 1 to n. Start a total at 0 and add to it inside the loop.",
+        "input": "10\n",
+        "expectedOutput": "55"
+      }
+    ]
+  },
+  {
+    "id": "while",
+    "title": "8. Repeating with while",
+    "summary": "Repeating for as long as something stays true.",
+    "steps": [
+      {
+        "title": "Countdown",
+        "instructions": "Start a variable at 5. While it is more than 0, print it and take 1 away. After the loop, print Go!",
+        "input": "",
+        "expectedOutput": "5\n4\n3\n2\n1\nGo!"
+      },
+      {
+        "title": "Keep halving",
+        "instructions": "Read a whole number. While it is more than 0, print it and then halve it with //, which divides and drops the part after the decimal point.",
+        "input": "20\n",
+        "expectedOutput": "20\n10\n5\n2\n1"
+      },
+      {
+        "title": "Add until zero",
+        "instructions": "Keep reading whole numbers and adding them to a total. Stop when the number read is 0, then print the total.",
+        "input": "5\n7\n3\n0\n",
+        "expectedOutput": "15"
+      }
+    ]
+  },
+  {
+    "id": "lists",
+    "title": "9. Lists",
+    "summary": "Keeping several values together and going through them.",
+    "steps": [
+      {
+        "title": "Make a list and show it",
+        "instructions": "Make a list called fruits holding \"apple\", \"banana\" and \"mango\". Print each fruit on its own line with a for loop.",
+        "input": "",
+        "expectedOutput": "apple\nbanana\nmango"
+      },
+      {
+        "title": "How many",
+        "instructions": "Keep the list from the last step. Print how many fruits are in it, using len().",
+        "input": "",
+        "expectedOutput": "3"
+      },
+      {
+        "title": "Add one more",
+        "instructions": "Keep the list. Add \"orange\" to the end with fruits.append(\"orange\"). Then print the last fruit, which is fruits[-1], and on the next line how many fruits there are now.",
+        "input": "",
+        "expectedOutput": "orange\n4"
+      },
+      {
+        "title": "The biggest number",
+        "instructions": "Make a list called numbers holding 4, 17, 9 and 2. Print the biggest number in it. You can go through the list remembering the biggest so far, or use max().",
+        "input": "",
+        "expectedOutput": "17"
+      }
+    ]
+  },
+  {
+    "id": "functions",
+    "title": "10. Functions",
+    "summary": "Giving a piece of code a name so it can be used again.",
+    "steps": [
+      {
+        "title": "A function that greets",
+        "instructions": "Define a function greet(name) that prints a greeting for the name, in the form shown below. Call it twice: once with \"Asha\" and once with \"Bikram\".",
+        "input": "",
+        "expectedOutput": "Hello, Asha!\nHello, Bikram!"
+      },
+      {
+        "title": "A function that gives back a value",
+        "instructions": "Define a function square(n) that returns n times n. It should not print anything itself. Print square(4), then print square(9).",
+        "input": "",
+        "expectedOutput": "16\n81"
+      },
+      {
+        "title": "Use it with input",
+        "instructions": "Keep your square function. Read a whole number and print its square by calling the function.",
+        "input": "12\n",
+        "expectedOutput": "144"
+      },
+      {
+        "title": "True or False",
+        "instructions": "Define a function is_even(n) that returns True when n is even and False when it is not. Print is_even(10), then print is_even(7).",
+        "input": "",
+        "expectedOutput": "True\nFalse"
+      }
+    ]
+  }
+]

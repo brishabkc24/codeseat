@@ -29,6 +29,7 @@ MAX_INSTRUCTIONS = 2_000
 MAX_EXPECTED = 5_000
 MAX_INPUT = 2_000
 MAX_CHECK_OUTPUT = 20_000
+MAX_HINT = 300
 IDLE_SECONDS = 2 * 60 * 60  # a classroom nobody has touched for this long leaves memory
 STUDENT_IDLE_SECONDS = 3 * 60  # a seated student who has not typed or run anything for this long shows as idle
 STUCK_AFTER = 3  # failed tries in a row (crashes, or checks that did not pass) before a seat shows as stuck
@@ -122,6 +123,7 @@ class Student:
     crashes: int = 0  # runs in a row that ended in an error
     misses: int = 0  # checks in a row that did not pass
     active_at: float = field(default_factory=time.time)  # when they last joined, typed, ran or clicked
+    hint: str = ""  # the teacher's note on this student's screen; empty when there is none
 
     @property
     def stuck(self) -> bool:
@@ -234,6 +236,13 @@ class Classroom:
         else:
             student.hand = None
         self.dirty = True
+
+    def set_hint(self, student: Student, text: object) -> None:
+        """Put a note from the teacher on the student's screen. Blank text takes it away."""
+        hint = clean_block(text, MAX_HINT, "The hint", required=False).strip()
+        if hint != student.hint:
+            student.hint = hint
+            self.dirty = True
 
     def hand_places(self) -> dict[str, int]:
         """Each raised hand's place in the queue, by student id: 1 went up first.
@@ -355,6 +364,7 @@ class Classroom:
                 entry["hand"] = places.get(student.id)
                 entry["stuck"] = student.stuck
                 entry["idleMinutes"] = self.idle_minutes(student, now)
+                entry["hint"] = student.hint or None
             result.append(entry)
         result.sort(key=lambda entry: entry["seat"])
         return result
@@ -382,6 +392,7 @@ class Classroom:
                     "hand": student.hand,
                     "crashes": student.crashes,
                     "misses": student.misses,
+                    "hint": student.hint,
                 }
                 for student in self.students.values()
             ],
@@ -424,6 +435,7 @@ class Classroom:
                 hand=info.get("hand"),
                 crashes=info.get("crashes", 0),
                 misses=info.get("misses", 0),
+                hint=info.get("hint", ""),
             )
         room.next_hand = max((s.hand for s in room.students.values() if s.hand is not None), default=0) + 1
         return room

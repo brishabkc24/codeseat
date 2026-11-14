@@ -98,6 +98,7 @@ function reduce(state: Classroom, action: Action): Classroom {
           if (message.seat !== undefined) you.seat = message.seat;
           if (message.passed !== undefined) you.passed = message.passed;
           if (message.hand !== undefined) you.hand = message.hand;
+          if (message.hint !== undefined) you.hint = message.hint;
           return { ...state, you };
         }
         case "teacher_source":

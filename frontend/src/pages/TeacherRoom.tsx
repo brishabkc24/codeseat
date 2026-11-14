@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { CodeEditor } from "../components/CodeEditor";
 import { LessonEditor, type StepDraft } from "../components/LessonEditor";
@@ -71,6 +71,18 @@ function TeacherDesk({ code, teacherName }: { code: string; teacherName: string 
 
   const watchedText =
     isWatching && classroom.studentSource?.seat === watchedSeat ? classroom.studentSource.text : null;
+
+  // A hint is a short note that appears above the watched student's editor.
+  const [hintDraft, setHintDraft] = useState("");
+  useEffect(() => {
+    setHintDraft("");
+  }, [watchedSeat]);
+  const sendHint = (event: FormEvent) => {
+    event.preventDefault();
+    const text = hintDraft.trim();
+    if (!text || watchedSeat === null) return;
+    if (send({ type: "hint", seat: watchedSeat, text })) setHintDraft("");
+  };
 
   // Who needs the teacher: raised hands in order, then students who look stuck.
   const queue = helpQueue(classroom.seats);
@@ -299,7 +311,7 @@ function TeacherDesk({ code, teacherName }: { code: string; teacherName: string 
             />
           </div>
 
-          <section className="viewer" aria-label="Student’s code">
+          <section className={watched ? "viewer viewer--open" : "viewer"} aria-label="Student’s code">
             {watched && watchedSeat !== null ? (
               <>
                 <div className="pane__head">
@@ -347,6 +359,35 @@ function TeacherDesk({ code, teacherName }: { code: string; teacherName: string 
                     </button>
                   </div>
                 </div>
+                <form className="hintbar" onSubmit={sendHint}>
+                  <label className="visually-hidden" htmlFor="hint-text">
+                    A hint for {watched.name}
+                  </label>
+                  <input
+                    id="hint-text"
+                    className="input"
+                    value={hintDraft}
+                    onChange={(event) => setHintDraft(event.target.value)}
+                    maxLength={300}
+                    autoComplete="off"
+                    placeholder={`A hint for ${watched.name}, shown above their code`}
+                  />
+                  <button type="submit" className="btn" disabled={!hintDraft.trim() || classroom.phase !== "open"}>
+                    Send hint
+                  </button>
+                  {watched.hint && (
+                    <p className="hintbar__live" role="status">
+                      <span className="hintbar__quote">On their screen: {watched.hint}</span>
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => send({ type: "hint", seat: watchedSeat, text: "" })}
+                      >
+                        Take back
+                      </button>
+                    </p>
+                  )}
+                </form>
                 <div className="pane__body">
                   {watchedText === null ? (
                     <div className="skeleton viewer__loading" aria-busy="true" />

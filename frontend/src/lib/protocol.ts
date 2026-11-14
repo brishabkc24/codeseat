@@ -32,6 +32,8 @@ export type Seat = {
   stuck?: boolean;
   /** Whole minutes without typing, running or clicking, once that is long enough to count; else null. */
   idleMinutes?: number | null;
+  /** The teacher's note now on this student's screen, or null when there is none. */
+  hint?: string | null;
 };
 
 export type You = {
@@ -41,6 +43,8 @@ export type You = {
   source: string;
   passed: string[];
   hand: boolean;
+  /** A note from the teacher, shown above the editor; empty when there is none. */
+  hint: string;
 };
 
 export type ServerMessage =
@@ -55,7 +59,7 @@ export type ServerMessage =
       you?: You;
     }
   | { type: "seats"; seats: Seat[]; lobby?: string[] }
-  | { type: "you"; seat?: number | null; passed?: string[]; hand?: boolean }
+  | { type: "you"; seat?: number | null; passed?: string[]; hand?: boolean; hint?: string }
   | { type: "teacher_source"; text: string }
   | { type: "student_source"; seat: number; text: string }
   | { type: "steps"; steps: Step[]; currentStep: string | null }

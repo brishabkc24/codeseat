@@ -93,6 +93,8 @@ function StudentDesk({ code, identity }: { code: string; identity: StudentIdenti
   });
   const runNow = () => python.run(sourceRef.current);
   const checkStep = (step: Step) => {
+    // Stay on this step afterwards, so its verdict is seen; a pass must not skip ahead unread.
+    setPicked(step.id);
     checkingRef.current = step;
     setChecking(step);
     python.run(sourceRef.current, { stdin: step.input });
@@ -225,7 +227,18 @@ function StudentDesk({ code, identity }: { code: string; identity: StudentIdenti
               </button>
             </div>
           </div>
-          <div className="pane__body">
+          <div className="pane__body pane__body--stack">
+            {you.hint && (
+              <aside className="hint" role="status" aria-label="A hint from your teacher">
+                <p className="hint__text">
+                  <span className="hint__from">Your teacher: </span>
+                  {you.hint}
+                </p>
+                <button type="button" className="btn" onClick={() => send({ type: "dismiss_hint" })}>
+                  Got it
+                </button>
+              </aside>
+            )}
             <CodeEditor
               value={source}
               onChange={setSource}
