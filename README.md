@@ -54,7 +54,7 @@ CodeSeat is also an installable web app: browsers that allow it show an "Install
 button in the top bar, and the installed app opens to its own screen, with its icon
 on the home screen or taskbar.
 
-Planned next: deployment.
+It can be put online on a free host; see "Putting it online" below.
 
 ## Run it
 
@@ -121,21 +121,47 @@ student in about 13 ms, and a whole class is seated in under a second.
 | --- | --- | --- |
 | Classroom rules | `backend/app/rooms.py` | Seats, students, lesson steps, raised hands and what each role may see, with no web code |
 | Accounts | `backend/app/accounts.py` | Password hashing (scrypt), session tokens, a brake on password guessing |
-| Storage | `backend/app/storage.py` | SQLite: teachers, sessions, and one JSON document per class |
+| Storage | `backend/app/storage.py` | SQLite or Postgres: teachers, sessions, and one JSON document per class |
+| Website in production | `backend/app/site.py` | Serves the built pages from the server, with the isolation headers |
 | Server | `backend/app/main.py` | REST for accounts and classes, one WebSocket per person in a class |
 | Live connection | `frontend/src/lib/useClassroom.ts` | Mirrors the class state and reconnects when the link drops |
 | Python runner | `frontend/public/py-worker.js` | Pyodide in a Web Worker, so an endless loop cannot freeze the page |
 | Screens | `frontend/src/pages/` | Start page, student room, teacher room |
 
-Four things to know before deploying:
+## Putting it online
 
-- Accounts and classes live in one SQLite file, so the server needs a disk that
-  survives restarts and deploys. A host with an ephemeral filesystem would lose every
-  account on each deploy.
-- The session cookie is marked `Secure` only when the request arrives over HTTPS.
-  Behind a proxy, run uvicorn with `--proxy-headers` so it knows the real scheme.
-- `input()` needs the page to be cross-origin isolated. The dev server sends the two
-  headers for that (see `frontend/vite.config.ts`); production hosting must send them too.
-- A step check is judged by the server, but from the output the student's browser
-  reports, since code never runs on the server. That keeps a lesson honest in class; it
-  is not proof against a student who edits what their browser sends.
+In production one server does everything. The `Dockerfile` builds the website and
+puts it beside the backend, which then serves the pages, the API and the class
+sockets from a single address (`backend/app/site.py`).
+
+Where the data lives depends on one setting:
+
+- With `DATABASE_URL` set to a `postgres://` address, teachers and classes are kept
+  in that Postgres database. Use this on any host whose disk does not survive a
+  restart, which includes most free plans.
+- Without it, they are kept in a SQLite file, as on your own computer.
+
+`render.yaml` describes a free web service on [Render](https://render.com) built from
+the Dockerfile. With a free Postgres database from [Neon](https://neon.com):
+
+1. Create a Neon project and copy its connection string.
+2. On Render choose New, then Blueprint, pick this repository, and paste the
+   connection string as `DATABASE_URL` when asked.
+
+Things to know about that setup:
+
+- A free Render service sleeps after 15 minutes without visitors and takes about a
+  minute to wake. Open the site before the lesson starts. A class in progress keeps
+  it awake.
+- Live classes are copied to the database two seconds after any change, so a
+  restart loses at most the last two seconds of typing.
+- The session cookie is marked `Secure` when the request arrives over HTTPS. The
+  Dockerfile starts uvicorn with `--proxy-headers` so it knows that behind the
+  host's proxy.
+- `input()` needs the page to be cross-origin isolated. The server sends the two
+  headers for that on every answer.
+
+One limit to know in any setup: a step check is judged by the server, but from the
+output the student's browser reports, since code never runs on the server. That
+keeps a lesson honest in class; it is not proof against a student who edits what
+their browser sends.

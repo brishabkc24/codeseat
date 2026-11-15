@@ -23,7 +23,7 @@ from app.rooms import (
     RoomError,
     outputs_match,
 )
-from app.storage import Storage, TeacherRecord
+from app.storage import SqliteStorage as Storage, TeacherRecord
 
 
 @pytest.fixture

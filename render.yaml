@@ -1,0 +1,15 @@
+# Render blueprint: one free web service built from the Dockerfile.
+# The free plan has no disk that lasts, so DATABASE_URL must point at a
+# Postgres database (for example a free one at neon.com). Render asks for
+# its value when the blueprint is first applied.
+services:
+  - type: web
+    name: codeseat
+    runtime: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        sync: false

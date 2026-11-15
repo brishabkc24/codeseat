@@ -40,7 +40,8 @@ from .accounts import (
     session_key,
 )
 from .rooms import Classroom, ClassroomStore, RoomError, Student, clean_text
-from .storage import EmailTaken, Storage, TeacherRecord
+from .site import serve_site
+from .storage import EmailTaken, TeacherRecord, open_storage
 
 HELLO_TIMEOUT_SECONDS = 10
 SAVE_EVERY_SECONDS = 2
@@ -48,6 +49,7 @@ PRESENCE_EVERY_SECONDS = 20  # how often teachers are told who has gone idle
 SEAT_NEWS_SECONDS = 0.1  # seat changes within this long reach students as one list
 SESSION_COOKIE = "codeseat_session"
 DEFAULT_DATABASE = Path(__file__).resolve().parent.parent / "data" / "codeseat.db"
+DEFAULT_SITE = Path(__file__).resolve().parent.parent / "static"
 
 # WebSocket close codes. The frontend turns these into messages for the user.
 CLOSE_BAD_HELLO = 4400
@@ -132,7 +134,11 @@ async def keep_saving() -> None:
     while True:
         await asyncio.sleep(SAVE_EVERY_SECONDS)
         try:
-            store.flush()
+            # The copies are taken here; the writing, which may cross a network to
+            # the database, happens on another thread so the classes never wait for it.
+            changed = store.take_changed()
+            if changed:
+                await asyncio.to_thread(store.write, changed)
             store.unload_idle(keep=lambda room: bool(hub.everyone(room.code)))
         except Exception:
             log.exception("Saving classrooms failed; will try again")
@@ -160,7 +166,9 @@ async def push_presence() -> None:
 
 
 app = FastAPI(title="CodeSeat", lifespan=lifespan)
-store = ClassroomStore(Storage(os.environ.get("CODESEAT_DATABASE", DEFAULT_DATABASE)))
+# DATABASE_URL (a postgres:// address) is for a host whose disk does not last;
+# without it the server keeps a SQLite file, at CODESEAT_DATABASE if that is set.
+store = ClassroomStore(open_storage(os.environ.get("DATABASE_URL") or os.environ.get("CODESEAT_DATABASE", DEFAULT_DATABASE)))
 hub = Hub()
 brake = LoginBrake()
 presence_sent: dict[str, tuple] = {}  # per class, the idle marks teachers were last told about
@@ -619,3 +627,11 @@ async def classroom_socket(ws: WebSocket, code: str) -> None:
             # Shielded so that cancelling this socket's task (a server shutting down, or the
             # test client right after a disconnect) still lets the teacher see the seat go dark.
             await asyncio.shield(broadcast_seats(room))
+
+
+# ---------------------------------------------------------------- the website
+
+# In production the built frontend sits beside the server and is served from here,
+# so the site, the API and the sockets share one address. Registered last: it
+# answers every path the routes above do not.
+serve_site(app, Path(os.environ.get("CODESEAT_STATIC", DEFAULT_SITE)))

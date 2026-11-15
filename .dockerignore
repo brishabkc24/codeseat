@@ -1,0 +1,11 @@
+.git
+**/node_modules
+**/dist
+**/.venv
+**/__pycache__
+**/.pytest_cache
+backend/data
+backend/tests
+backend/tools
+frontend/public/pyodide
+frontend/.hallmark

@@ -462,6 +462,7 @@ class ClassroomStore:
     def __init__(self, storage: Storage) -> None:
         self.storage = storage
         self._rooms: dict[str, Classroom] = {}
+        self._deleted: set[str] = set()  # codes of deleted classes, so a late save cannot bring one back
 
     def create(self, teacher_id: str, title: object, rows: int, cols: int) -> Classroom:
         clean = clean_text(title, MAX_TITLE, "The class name")
@@ -490,6 +491,7 @@ class ClassroomStore:
         return self._rooms.get(code)
 
     def delete(self, code: str) -> None:
+        self._deleted.add(code)
         self._rooms.pop(code, None)
         self.storage.delete_class(code)
 
@@ -517,15 +519,38 @@ class ClassroomStore:
             )
         return summaries
 
-    def flush(self) -> int:
-        """Copy every changed classroom to storage. Returns how many were written."""
-        written = 0
+    def take_changed(self) -> list[tuple[Classroom, ClassRecord]]:
+        """Every changed classroom with a copy of what to save. The classrooms are marked saved.
+
+        Taking the copies is quick and happens where the classrooms are changed;
+        writing them (see `write`) may be slow and can then happen on another thread.
+        """
+        changed = []
         for room in list(self._rooms.values()):
             if room.dirty:
                 room.dirty = False
-                self.storage.save_class(room.record())
-                written += 1
-        return written
+                changed.append((room, room.record()))
+        return changed
+
+    def write(self, changed: list[tuple[Classroom, ClassRecord]]) -> None:
+        """Writes the copies to storage. A classroom whose write fails counts as changed again."""
+        failure: Exception | None = None
+        for room, record in changed:
+            if record.code in self._deleted:
+                continue  # deleted while its copy waited; writing it would bring the class back
+            try:
+                self.storage.save_class(record)
+            except Exception as error:
+                room.dirty = True
+                failure = failure or error
+        if failure is not None:
+            raise failure
+
+    def flush(self) -> int:
+        """Copy every changed classroom to storage. Returns how many were written."""
+        changed = self.take_changed()
+        self.write(changed)
+        return len(changed)
 
     def unload_idle(self, now: float | None = None, keep=None) -> None:
         """Drop classrooms nobody has touched for a while, saving them first.
