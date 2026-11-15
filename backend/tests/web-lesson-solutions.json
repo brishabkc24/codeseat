@@ -1,0 +1,33 @@
+{
+  "web-first-page": [
+    "<h1>My first page</h1>",
+    "<h1>My first page</h1>\n<p>I am learning HTML.</p>",
+    "<h1>My first page</h1>\n<p>I am learning HTML.</p>\n<h2>About me</h2>\n<p>I like to build things.</p>"
+  ],
+  "web-lists-links": [
+    "<h1>My favourite fruits</h1>\n<ul>\n  <li>Apple</li>\n  <li>Banana</li>\n  <li>Mango</li>\n</ul>",
+    "<h1>My favourite fruits</h1>\n<ol>\n  <li>Apple</li>\n  <li>Banana</li>\n  <li>Mango</li>\n</ol>",
+    "<h1>My favourite fruits</h1>\n<ol>\n  <li>Apple</li>\n  <li>Banana</li>\n  <li>Mango</li>\n</ol>\n<p><a href=\"https://www.python.org\">Learn Python</a></p>"
+  ],
+  "web-style": [
+    "<h1>Hello</h1>\n<p>This page has style.</p>",
+    "<style>\n  h1 { color: tomato; }\n</style>\n<h1>Hello</h1>\n<p>This page has style.</p>",
+    "<style>\n  h1 { color: tomato; }\n  p { font-size: 24px; color: steelblue; }\n</style>\n<h1>Hello</h1>\n<p>This page has style.</p>"
+  ],
+  "web-javascript": [
+    "<script>\n  console.log(\"Hello\");\n</script>",
+    "<script>\n  console.log(6 * 7);\n</script>",
+    "<script>\n  let name = \"Asha\";\n  console.log(\"Hello, \" + name);\n</script>",
+    "<script>\n  let name = prompt(\"Your name?\");\n  console.log(\"Hello, \" + name);\n</script>"
+  ],
+  "web-decisions": [
+    "<script>\n  let marks = Number(prompt(\"Marks?\"));\n  if (marks >= 40) {\n    console.log(\"Pass\");\n  } else {\n    console.log(\"Fail\");\n  }\n</script>",
+    "<script>\n  let marks = Number(prompt(\"Marks?\"));\n  if (marks >= 40) {\n    console.log(\"Pass\");\n  } else {\n    console.log(\"Fail\");\n  }\n</script>",
+    "<script>\n  let n = Number(prompt(\"A number?\"));\n  if (n % 2 === 0) {\n    console.log(\"Even\");\n  } else {\n    console.log(\"Odd\");\n  }\n</script>"
+  ],
+  "web-change-page": [
+    "<script>\n  for (let i = 1; i <= 5; i++) {\n    console.log(i);\n  }\n</script>",
+    "<h1 id=\"title\">Old words</h1>\n<script>\n  document.getElementById(\"title\").textContent = \"New words\";\n</script>",
+    "<h1 id=\"title\">Old words</h1>\n<script>\n  let name = prompt(\"Your name?\");\n  document.getElementById(\"title\").textContent = \"Welcome, \" + name + \"!\";\n</script>"
+  ]
+}

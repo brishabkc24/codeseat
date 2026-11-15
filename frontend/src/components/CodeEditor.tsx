@@ -1,3 +1,4 @@
+import { html } from "@codemirror/lang-html";
 import { python } from "@codemirror/lang-python";
 import { HighlightStyle, indentUnit, syntaxHighlighting } from "@codemirror/language";
 import { Prec } from "@codemirror/state";
@@ -5,6 +6,7 @@ import { EditorView, keymap } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import CodeMirror from "@uiw/react-codemirror";
 import { useMemo, useRef } from "react";
+import type { Language } from "../lib/protocol";
 
 // Every colour here is a token from the stylesheet, so the editor follows the theme.
 const surface = EditorView.theme(
@@ -71,16 +73,18 @@ type Props = {
   placeholder?: string;
   /** Called on Ctrl+Enter (Cmd+Enter on a Mac). */
   onRun?: () => void;
+  /** What is being written: Python, or a web page (HTML with its CSS and JavaScript). */
+  language?: Language;
 };
 
-export function CodeEditor({ value, label, onChange, readOnly = false, placeholder, onRun }: Props) {
+export function CodeEditor({ value, label, onChange, readOnly = false, placeholder, onRun, language = "python" }: Props) {
   const runRef = useRef(onRun);
   runRef.current = onRun;
 
   const extensions = useMemo(
     () => [
-      python(),
-      indentUnit.of("    "),
+      language === "web" ? html() : python(),
+      indentUnit.of(language === "web" ? "  " : "    "),
       syntax,
       EditorView.contentAttributes.of({ "aria-label": label }),
       Prec.highest(
@@ -95,7 +99,7 @@ export function CodeEditor({ value, label, onChange, readOnly = false, placehold
         ]),
       ),
     ],
-    [label],
+    [label, language],
   );
 
   return (

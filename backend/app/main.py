@@ -292,6 +292,7 @@ class NewClass(BaseModel):
     title: str
     rows: int
     cols: int
+    language: str = "python"
 
 
 @app.get("/api/health")
@@ -307,7 +308,7 @@ def my_classes(teacher: TeacherRecord = Depends(require_teacher)) -> dict:
 @app.post("/api/classes", status_code=201)
 def create_class(body: NewClass, teacher: TeacherRecord = Depends(require_teacher)) -> dict:
     try:
-        room = store.create(teacher.id, body.title, body.rows, body.cols)
+        room = store.create(teacher.id, body.title, body.rows, body.cols, body.language)
     except RoomError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return room.info()
@@ -466,7 +467,7 @@ async def handle_student(room: Classroom, conn: Connection, message: dict) -> No
 
     elif kind == "check":
         step = room.step(message.get("step"))
-        passed = room.check(student, step, message.get("status"), message.get("output"))
+        passed = room.check(student, step, message.get("status"), message.get("output"), message.get("page"))
         await conn.send({"type": "check", "step": step.id, "passed": passed})
         await broadcast_seats_to_teachers(room)
 

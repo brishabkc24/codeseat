@@ -1,11 +1,15 @@
 import { type FormEvent, useState } from "react";
 import starterLessons from "../data/starter-lessons.json";
-import type { Step } from "../lib/protocol";
+import webLessons from "../data/starter-lessons-web.json";
+import type { Language, Step } from "../lib/protocol";
 
 /** A ready-made lesson a teacher can load and then change (src/data/starter-lessons.json). */
 type StarterLesson = { id: string; title: string; summary: string; steps: Omit<Step, "id">[] };
 
-const LIBRARY = starterLessons as StarterLesson[];
+const LIBRARY: Record<Language, StarterLesson[]> = {
+  python: starterLessons as StarterLesson[],
+  web: webLessons as StarterLesson[],
+};
 
 /** A step as sent to the server: an existing step keeps its id, a new one has none. */
 export type StepDraft = Omit<Step, "id"> & { id?: string };
@@ -14,6 +18,8 @@ type Draft = StepDraft & { key: number };
 
 type Props = {
   steps: Step[];
+  /** What the class writes; it decides the wording here and which ready-made lessons are offered. */
+  language: Language;
   /** True from the save being sent until the server answers. */
   saving: boolean;
   /** The server's refusal of the last save, if any. */
@@ -43,7 +49,9 @@ function written(draft: Draft): boolean {
 }
 
 /** The teacher's form for the lesson: every step with its task, input and expected output. */
-export function LessonEditor({ steps, saving, notice, onSave, onCancel }: Props) {
+export function LessonEditor({ steps, language, saving, notice, onSave, onCancel }: Props) {
+  const web = language === "web";
+  const library = LIBRARY[language];
   const [drafts, setDrafts] = useState<Draft[]>(() => (steps.length > 0 ? steps.map(fromStep) : [blank()]));
   const [tried, setTried] = useState(false);
 
@@ -90,8 +98,10 @@ export function LessonEditor({ steps, saving, notice, onSave, onCancel }: Props)
         <div className="lesson-editor__intro">
           <h2>Lesson steps</h2>
           <p className="lead">
-            Each step sets a task and the exact output a program must print to pass it. Students check a step
-            from their desk; passes show on the seat map.
+            {web
+              ? "Each step sets a task and the lines the page must show, or its console must print, to pass it."
+              : "Each step sets a task and the exact output a program must print to pass it."}{" "}
+            Students check a step from their desk; passes show on the seat map.
           </p>
         </div>
         <div className="lesson-editor__actions">
@@ -132,11 +142,13 @@ export function LessonEditor({ steps, saving, notice, onSave, onCancel }: Props)
         {browsing && (
           <>
             <p className="library__note">
-              Ten first lessons in Python, in teaching order. Loading one fills in the steps below, where you
-              can change anything before saving.
+              {web
+                ? "First lessons in HTML and JavaScript, in teaching order."
+                : "Ten first lessons in Python, in teaching order."}{" "}
+              Loading one fills in the steps below, where you can change anything before saving.
             </p>
             <ul className="courses">
-              {LIBRARY.map((lesson) => (
+              {library.map((lesson) => (
                 <li key={lesson.id} className="course">
                   <div className="course__about">
                     <h4 className="course__title">{lesson.title}</h4>
@@ -239,13 +251,15 @@ export function LessonEditor({ steps, saving, notice, onSave, onCancel }: Props)
                       onChange={(event) => patch(draft.key, { instructions: event.target.value })}
                       maxLength={2000}
                     />
-                    <p className="field__help">What the student should make the program do. Optional.</p>
+                    <p className="field__help">
+                      What the student should make the {web ? "page" : "program"} do. Optional.
+                    </p>
                   </div>
 
                   <div className="step-form__io">
                     <div className="field">
                       <label className="field__label" htmlFor={`${id}-input`}>
-                        Input for the program
+                        {web ? "Answers for prompt()" : "Input for the program"}
                       </label>
                       <textarea
                         id={`${id}-input`}
@@ -256,7 +270,11 @@ export function LessonEditor({ steps, saving, notice, onSave, onCancel }: Props)
                         maxLength={2000}
                         spellCheck={false}
                       />
-                      <p className="field__help">One line per input() call. Leave empty if the program asks nothing.</p>
+                      <p className="field__help">
+                        {web
+                          ? "One line per prompt() call. Leave empty if the page asks nothing."
+                          : "One line per input() call. Leave empty if the program asks nothing."}
+                      </p>
                     </div>
                     <div className="field">
                       <label className="field__label" htmlFor={`${id}-output`}>
@@ -277,8 +295,12 @@ export function LessonEditor({ steps, saving, notice, onSave, onCancel }: Props)
                         role={outputMissing ? "alert" : undefined}
                       >
                         {outputMissing
-                          ? "Say what the program must print."
-                          : "Exactly what the program prints. Spaces at line ends and blank lines at the end do not count."}
+                          ? web
+                            ? "Say what the page must show or print."
+                            : "Say what the program must print."
+                          : web
+                            ? "The lines the page shows, or what its console prints. Styling cannot be checked this way."
+                            : "Exactly what the program prints. Spaces at line ends and blank lines at the end do not count."}
                       </p>
                     </div>
                   </div>

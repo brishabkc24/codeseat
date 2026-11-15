@@ -164,3 +164,33 @@ def test_each_lesson_is_accepted_by_the_classroom_rules(lesson):
     room.set_steps(lesson["steps"])  # raises if a title, instruction or output breaks a limit
     assert [step.title for step in room.steps] == [step["title"] for step in lesson["steps"]]
     assert all(set(step) == {"title", "instructions", "input", "expectedOutput"} for step in lesson["steps"])
+
+
+# ---------------------------------------------------------------- the web lessons
+
+# A web page cannot be run here, so these tests cover what can be: the shape of the
+# lessons, the server's limits, and that every step has a recorded answer. The
+# answers in web-lesson-solutions.json are the pages that were loaded into a real
+# browser, one step at a time, when the lessons were written.
+WEB_LESSONS = json.loads(
+    (Path(__file__).resolve().parents[2] / "frontend" / "src" / "data" / "starter-lessons-web.json").read_text("utf-8")
+)
+WEB_SOLUTIONS = json.loads((Path(__file__).resolve().parent / "web-lesson-solutions.json").read_text("utf-8"))
+
+
+def test_every_web_lesson_step_has_a_recorded_answer():
+    assert len({lesson["id"] for lesson in WEB_LESSONS}) == len(WEB_LESSONS) == 6
+    assert set(WEB_SOLUTIONS) == {lesson["id"] for lesson in WEB_LESSONS}
+    for lesson in WEB_LESSONS:
+        assert lesson["summary"].strip()
+        assert len(WEB_SOLUTIONS[lesson["id"]]) == len(lesson["steps"]), lesson["id"]
+        for step in lesson["steps"]:
+            assert not outputs_match(step["expectedOutput"], ""), step["title"]
+
+
+@pytest.mark.parametrize("lesson", WEB_LESSONS, ids=[lesson["id"] for lesson in WEB_LESSONS])
+def test_each_web_lesson_is_accepted_by_the_classroom_rules(lesson):
+    room = Classroom(code="ABCDEF", title="Web", rows=1, cols=1, teacher_id="t1", language="web")
+    room.set_steps(lesson["steps"])
+    assert [step.title for step in room.steps] == [step["title"] for step in lesson["steps"]]
+    assert all(set(step) == {"title", "instructions", "input", "expectedOutput"} for step in lesson["steps"])

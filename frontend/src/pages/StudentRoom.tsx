@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useParams } from "react-router-dom";
 import { CodeEditor } from "../components/CodeEditor";
+import { PagePanel, PagePreview } from "../components/PagePanel";
 import { RoomClosed, RoomLoading } from "../components/RoomStates";
 import { RunPanel } from "../components/RunPanel";
 import { SeatMap } from "../components/SeatMap";
@@ -9,7 +10,8 @@ import { TopBar } from "../components/TopBar";
 import { type StudentIdentity, loadStudent, saveStudent } from "../lib/api";
 import { type Hello, type RunResult, type Step, seatLabel } from "../lib/protocol";
 import { type Classroom, useClassroom } from "../lib/useClassroom";
-import { usePython } from "../lib/usePython";
+import { type OutputChunk, usePython } from "../lib/usePython";
+import { useWebPage } from "../lib/useWebPage";
 import { useThrottledSend } from "../lib/useThrottledSend";
 
 export function StudentRoom() {
@@ -28,7 +30,15 @@ export function StudentRoom() {
 }
 
 /** What the student's own check run printed, kept to explain the server's verdict. */
-type CheckRun = { step: string; result: RunResult; output: string };
+type CheckRun = { step: string; result: RunResult; output: string; page: string };
+
+/** What a program printed, without its error text or CodeSeat's own notes. */
+function printed(chunks: OutputChunk[]): string {
+  return chunks
+    .filter((chunk) => chunk.stream === "stdout")
+    .map((chunk) => chunk.text)
+    .join("");
+}
 
 function StudentDesk({ code, identity }: { code: string; identity: StudentIdentity }) {
   const hello = useMemo<Hello>(
@@ -76,7 +86,8 @@ function StudentDesk({ code, identity }: { code: string; identity: StudentIdenti
   const [checking, setChecking] = useState<Step | null>(null);
   const checkingRef = useRef<Step | null>(null);
   const [checkRun, setCheckRun] = useState<CheckRun | null>(null);
-  const python = usePython((result, chunks) => {
+  /** A run has ended: tell the server, as a check if it was made for a step. */
+  const report = (result: RunResult, output: string, page: string | null) => {
     const step = checkingRef.current;
     checkingRef.current = null;
     setChecking(null);
@@ -84,26 +95,47 @@ function StudentDesk({ code, identity }: { code: string; identity: StudentIdenti
       send({ type: "run", status: result });
       return;
     }
-    const output = chunks
-      .filter((chunk) => chunk.stream === "stdout")
-      .map((chunk) => chunk.text)
-      .join("");
-    setCheckRun({ step: step.id, result, output });
-    send({ type: "check", step: step.id, status: result, output });
+    setCheckRun({ step: step.id, result, output, page: page ?? "" });
+    send({ type: "check", step: step.id, status: result, output, ...(page === null ? {} : { page }) });
+  };
+
+  // The class writes Python or web pages. Both runners are named here, but the
+  // Python one starts only in a Python class, and the web one costs nothing idle.
+  const isWeb = room?.language === "web";
+  const python = usePython((result, chunks) => report(result, printed(chunks), null), room?.language === "python");
+  const web = useWebPage((finish) => {
+    if (finish.mode !== "preview") report(finish.result, printed(finish.output), finish.page);
   });
-  const runNow = () => python.run(sourceRef.current);
+  const startPage = web.start;
+
+  const runNow = () => (isWeb ? startPage(sourceRef.current, "run") : python.run(sourceRef.current));
   const checkStep = (step: Step) => {
     // Stay on this step afterwards, so its verdict is seen; a pass must not skip ahead unread.
     setPicked(step.id);
     checkingRef.current = step;
     setChecking(step);
-    python.run(sourceRef.current, { stdin: step.input });
+    if (isWeb) startPage(sourceRef.current, "check", step.input);
+    else python.run(sourceRef.current, { stdin: step.input });
   };
   const stopNow = () => {
     checkingRef.current = null;
     setChecking(null);
     python.stop();
   };
+
+  // A web page shows itself as it is typed, a moment after the typing stops.
+  // These previews are quiet: pop-ups are off and the teacher is not told.
+  const seated = (you?.seat ?? null) !== null;
+  useEffect(() => {
+    if (!isWeb || !adopted || !seated) return;
+    const timer = window.setTimeout(() => {
+      if (checkingRef.current === null) startPage(source, "preview");
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [isWeb, adopted, seated, source, startPage]);
+
+  // In a web class the teacher's code can be looked at as code or as the page it makes.
+  const [teacherView, setTeacherView] = useState<"code" | "page">("code");
 
   // Which step is open: the one I picked, else where the teacher points, else my next one.
   const [picked, setPicked] = useState<string | null>(null);
@@ -164,17 +196,33 @@ function StudentDesk({ code, identity }: { code: string; identity: StudentIdenti
     <section className="pane" aria-label="Teacher’s code">
       <div className="pane__head">
         <h2 className="pane__title">Teacher’s code</h2>
-        <span className={classroom.phase === "open" ? "status status--live" : "status"} role="status">
-          {classroom.phase === "open" ? "Live" : "Paused"}
-        </span>
+        <div className="pane__tools">
+          <span className={classroom.phase === "open" ? "status status--live" : "status"} role="status">
+            {classroom.phase === "open" ? "Live" : "Paused"}
+          </span>
+          {isWeb && (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setTeacherView(teacherView === "code" ? "page" : "code")}
+            >
+              {teacherView === "code" ? "Show page" : "Show code"}
+            </button>
+          )}
+        </div>
       </div>
       <div className="pane__body">
-        <CodeEditor
-          value={classroom.teacherSource}
-          label="Teacher’s code, read only"
-          readOnly
-          placeholder="Your teacher has not typed anything yet."
-        />
+        {isWeb && teacherView === "page" ? (
+          <PagePreview source={classroom.teacherSource} title="Teacher’s page" />
+        ) : (
+          <CodeEditor
+            value={classroom.teacherSource}
+            label="Teacher’s code, read only"
+            readOnly
+            placeholder="Your teacher has not typed anything yet."
+            language={room.language}
+          />
+        )}
       </div>
     </section>
   );
@@ -200,8 +248,9 @@ function StudentDesk({ code, identity }: { code: string; identity: StudentIdenti
               onSelect={setPicked}
               onCheck={checkStep}
               checking={checking?.id ?? null}
-              canCheck={python.phase === "ready"}
+              canCheck={isWeb || python.phase === "ready"}
               verdict={verdict}
+              language={room.language}
             />
             {teacherPane}
           </div>
@@ -244,10 +293,11 @@ function StudentDesk({ code, identity }: { code: string; identity: StudentIdenti
               onChange={setSource}
               label="Your code"
               onRun={runNow}
-              placeholder="Type your Python here."
+              placeholder={isWeb ? "Type your HTML here. CSS goes in <style>, JavaScript in <script>." : "Type your Python here."}
+              language={room.language}
             />
           </div>
-          <RunPanel python={{ ...python, stop: stopNow }} onRun={runNow} />
+          {isWeb ? <PagePanel web={web} onRun={runNow} /> : <RunPanel python={{ ...python, stop: stopNow }} onRun={runNow} />}
         </section>
       </main>
     </>
@@ -270,5 +320,5 @@ function verdictFor(selected: Step | null, classroom: Classroom, checkRun: Check
   const answer = classroom.lastCheck;
   if (!selected || !answer || answer.step !== selected.id) return null;
   const run = checkRun?.step === selected.id ? checkRun : null;
-  return { passed: answer.passed, result: run?.result ?? "ok", output: run?.output ?? "" };
+  return { passed: answer.passed, result: run?.result ?? "ok", output: run?.output ?? "", page: run?.page ?? "" };
 }

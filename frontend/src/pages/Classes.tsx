@@ -3,7 +3,7 @@ import { Link, Navigate, useNavigate } from "react-router-dom";
 import { SeatMap } from "../components/SeatMap";
 import { TopBar } from "../components/TopBar";
 import { createClass, deleteClass, errorText, listClasses } from "../lib/api";
-import type { ClassSummary, Teacher } from "../lib/protocol";
+import type { ClassSummary, Language, Teacher } from "../lib/protocol";
 import { useSession } from "../lib/session";
 
 const ROW_CHOICES = [1, 2, 3, 4, 5, 6, 7, 8];
@@ -52,6 +52,7 @@ function ClassesPage({ teacher, signOut }: { teacher: Teacher; signOut: () => Pr
   const [title, setTitle] = useState("");
   const [rows, setRows] = useState(4);
   const [cols, setCols] = useState(6);
+  const [language, setLanguage] = useState<Language>("python");
   const [startError, setStartError] = useState("");
   const [starting, setStarting] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
@@ -67,7 +68,7 @@ function ClassesPage({ teacher, signOut }: { teacher: Teacher; signOut: () => Pr
     setStartError("");
     setStarting(true);
     try {
-      const room = await createClass(cleanTitle, rows, cols);
+      const room = await createClass(cleanTitle, rows, cols, language);
       navigate(`/teach/${room.code}`);
     } catch (error) {
       setStartError(errorText(error));
@@ -141,6 +142,22 @@ function ClassesPage({ teacher, signOut }: { teacher: Teacher; signOut: () => Pr
                     {startError || "Students see this at the top of the class."}
                   </p>
                 </div>
+                <div className="field">
+                  <label className="field__label" htmlFor="start-language">
+                    The class writes
+                  </label>
+                  <select
+                    id="start-language"
+                    className="input"
+                    name="language"
+                    value={language}
+                    onChange={(event) => setLanguage(event.target.value as Language)}
+                  >
+                    <option value="python">Python</option>
+                    <option value="web">Web pages (HTML, CSS, JavaScript)</option>
+                  </select>
+                  <p className="field__help">This cannot be changed once the class is made.</p>
+                </div>
                 <div className="home__sizes">
                   <div className="field">
                     <label className="field__label" htmlFor="start-rows">
@@ -210,7 +227,9 @@ function ClassesPage({ teacher, signOut }: { teacher: Teacher; signOut: () => Pr
               {classes.map((item) => (
                 <li key={item.code} className="course">
                   <div className="course__about">
-                    <h3 className="course__title">{item.title}</h3>
+                    <h3 className="course__title">
+                      {item.title} <span className="course__kind">{item.language === "web" ? "Web pages" : "Python"}</span>
+                    </h3>
                     <p className="course__meta">
                       <span className="mono">{item.code}</span> · {item.rows * item.cols} seats ·{" "}
                       {plural(item.students, "student")} · {plural(item.steps, "step")}

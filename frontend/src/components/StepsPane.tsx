@@ -1,8 +1,8 @@
 import { classes, firstDifference, stepNumber, tidyOutput } from "../lib/lesson";
-import type { RunResult, Step } from "../lib/protocol";
+import type { Language, RunResult, Step } from "../lib/protocol";
 
-/** The server's verdict on a check, with what the program printed on that run. */
-export type Verdict = { passed: boolean; result: RunResult; output: string };
+/** The server's verdict on a check, with what the program printed (and, for a web page, showed) on that run. */
+export type Verdict = { passed: boolean; result: RunResult; output: string; page: string };
 
 type Props = {
   steps: Step[];
@@ -17,6 +17,7 @@ type Props = {
   canCheck: boolean;
   /** The verdict on the selected step, if it was checked on this visit. */
   verdict: Verdict | null;
+  language: Language;
 };
 
 /** The student's side of the lesson: the steps, the selected task and the check on it. */
@@ -30,7 +31,9 @@ export function StepsPane({
   checking,
   canCheck,
   verdict,
+  language,
 }: Props) {
+  const web = language === "web";
   const done = passed.includes(selected.id);
 
   return (
@@ -76,12 +79,12 @@ export function StepsPane({
           {selected.instructions && <p className="task__text">{selected.instructions}</p>}
           {selected.input && (
             <div className="task__io">
-              <p className="task__label">Your program will be given</p>
+              <p className="task__label">{web ? "prompt() on your page will be answered with" : "Your program will be given"}</p>
               <pre className="task__block">{selected.input}</pre>
             </div>
           )}
           <div className="task__io">
-            <p className="task__label">It should print</p>
+            <p className="task__label">{web ? "The page, or its console, should show" : "It should print"}</p>
             <pre className="task__block">{selected.expectedOutput}</pre>
           </div>
           <div className="task__actions">
@@ -95,13 +98,16 @@ export function StepsPane({
               {checking === selected.id ? "Checking…" : done ? "Check again" : "Check this step"}
             </button>
             <p className="task__hint">
-              Runs your code{selected.input ? " with the input above" : ""} and compares what it prints.
+              {web
+                ? `Loads your page${selected.input ? " with the answers above" : ""} and compares what it shows.`
+                : `Runs your code${selected.input ? " with the input above" : ""} and compares what it prints.`}
             </p>
           </div>
           {verdict && (
             <VerdictNote
               step={selected}
               verdict={verdict}
+              web={web}
               next={nextStep(steps, passed, selected)}
               nextNumber={(id) => stepNumber(steps, id)}
               onSelect={onSelect}
@@ -123,18 +129,27 @@ function nextStep(steps: Step[], passed: string[], current: Step): Step | null {
 type VerdictProps = {
   step: Step;
   verdict: Verdict;
+  web: boolean;
   next: Step | null;
   nextNumber: (id: string) => number;
   onSelect: (id: string) => void;
 };
 
-function VerdictNote({ step, verdict, next, nextNumber, onSelect }: VerdictProps) {
+/** The lines a page shows, as the server compares them: blank lines and outer spaces do not count. */
+function shownLines(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/\s+/g, " "))
+    .filter((line) => line !== "");
+}
+
+function VerdictNote({ step, verdict, web, next, nextNumber, onSelect }: VerdictProps) {
   if (verdict.passed) {
     return (
       <div className="task__verdict task__verdict--ok task__verdict--row" role="status">
         <p>
           {next
-            ? "Passed. Your program printed what this step asks for."
+            ? `Passed. Your ${web ? "page shows" : "program printed"} what this step asks for.`
             : "Passed. That was the last one: every step is done."}
         </p>
         {next && (
@@ -148,8 +163,29 @@ function VerdictNote({ step, verdict, next, nextNumber, onSelect }: VerdictProps
   if (verdict.result === "error") {
     return (
       <p className="task__verdict task__verdict--no" role="status">
-        Not yet. Your program stopped with an error; the output pane shows where.
+        {web
+          ? "Not yet. A script on your page stopped with an error; the console under the page says where."
+          : "Not yet. Your program stopped with an error; the output pane shows where."}
       </p>
+    );
+  }
+  if (web) {
+    const consoleLines = tidyOutput(verdict.output);
+    const pageLines = shownLines(verdict.page);
+    return (
+      <div className="task__verdict task__verdict--no" role="status">
+        <p>Not yet. Neither the page nor its console shows exactly what the step asks for.</p>
+        <p className="task__label">Your page shows</p>
+        <pre className="task__block">
+          {pageLines.length === 0 ? <span className="console__note">Nothing</span> : pageLines.join("\n")}
+        </pre>
+        {consoleLines.length > 0 && (
+          <>
+            <p className="task__label">Its console printed</p>
+            <pre className="task__block">{consoleLines.join("\n")}</pre>
+          </>
+        )}
+      </div>
     );
   }
   const line = firstDifference(step.expectedOutput, verdict.output);

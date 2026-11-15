@@ -1,6 +1,9 @@
 // The shapes of the messages exchanged with the server (see backend/app/main.py).
 
-export type ClassInfo = { code: string; title: string; rows: number; cols: number };
+/** What a class writes: Python programs, or web pages (HTML with its CSS and JavaScript). */
+export type Language = "python" | "web";
+
+export type ClassInfo = { code: string; title: string; rows: number; cols: number; language: Language };
 
 export type Teacher = { id: string; name: string; email: string };
 

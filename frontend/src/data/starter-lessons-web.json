@@ -1,0 +1,158 @@
+[
+  {
+    "id": "web-first-page",
+    "title": "1. A first web page",
+    "summary": "Headings and paragraphs: the words a page shows.",
+    "steps": [
+      {
+        "title": "A heading",
+        "instructions": "A web page is made of tags. Put the words My first page between <h1> and </h1> to make a heading.",
+        "input": "",
+        "expectedOutput": "My first page"
+      },
+      {
+        "title": "A paragraph under it",
+        "instructions": "Keep the heading. Under it add a paragraph with <p> and </p> that says: I am learning HTML.",
+        "input": "",
+        "expectedOutput": "My first page\nI am learning HTML."
+      },
+      {
+        "title": "A smaller heading",
+        "instructions": "Keep both. Add a smaller heading with <h2> that says About me, and under it a paragraph that says I like to build things.",
+        "input": "",
+        "expectedOutput": "My first page\nI am learning HTML.\nAbout me\nI like to build things."
+      }
+    ]
+  },
+  {
+    "id": "web-lists-links",
+    "title": "2. Lists and links",
+    "summary": "Putting things in a list, and linking to another page.",
+    "steps": [
+      {
+        "title": "A list of three",
+        "instructions": "Start a new page. Make a heading <h1> that says My favourite fruits. Under it make a list: <ul> around the whole list, and <li> around each of Apple, Banana and Mango.",
+        "input": "",
+        "expectedOutput": "My favourite fruits\nApple\nBanana\nMango"
+      },
+      {
+        "title": "A numbered list",
+        "instructions": "Change <ul> to <ol>, and its closing tag too. The page now numbers the fruits by itself. The numbers are drawn by the browser, so the words on the page stay the same.",
+        "input": "",
+        "expectedOutput": "My favourite fruits\nApple\nBanana\nMango"
+      },
+      {
+        "title": "A link",
+        "instructions": "Under the list add a paragraph holding a link. A link is <a href=\"https://www.python.org\">Learn Python</a>: the address goes in href, and the words between the tags are what the page shows.",
+        "input": "",
+        "expectedOutput": "My favourite fruits\nApple\nBanana\nMango\nLearn Python"
+      }
+    ]
+  },
+  {
+    "id": "web-style",
+    "title": "3. Colour and size with CSS",
+    "summary": "Styling a page. The words are checked; the colours are for the eye.",
+    "steps": [
+      {
+        "title": "A page to style",
+        "instructions": "Start a new page with a heading <h1> that says Hello and a paragraph <p> that says This page has style.",
+        "input": "",
+        "expectedOutput": "Hello\nThis page has style."
+      },
+      {
+        "title": "Colour the heading",
+        "instructions": "Above the heading add <style> and </style>. Between them write a rule: h1 { color: tomato; } The heading turns red. Only the words can be checked, so look at your page to see that it worked.",
+        "input": "",
+        "expectedOutput": "Hello\nThis page has style."
+      },
+      {
+        "title": "Style the paragraph too",
+        "instructions": "Add a second rule inside <style>: p { font-size: 24px; color: steelblue; } Then try other colours and sizes of your own.",
+        "input": "",
+        "expectedOutput": "Hello\nThis page has style."
+      }
+    ]
+  },
+  {
+    "id": "web-javascript",
+    "title": "4. First JavaScript",
+    "summary": "Making the page calculate, and reading its console.",
+    "steps": [
+      {
+        "title": "Say hello in the console",
+        "instructions": "JavaScript goes between <script> and </script>. Write console.log(\"Hello\"); there. The console under your page shows what it prints.",
+        "input": "",
+        "expectedOutput": "Hello"
+      },
+      {
+        "title": "Let JavaScript do the sum",
+        "instructions": "Print the result of 6 times 7 with console.log, without typing the answer yourself. Use * to multiply.",
+        "input": "",
+        "expectedOutput": "42"
+      },
+      {
+        "title": "A variable",
+        "instructions": "Make a variable with let name = \"Asha\"; and print a greeting that uses it, so the console shows the line below.",
+        "input": "",
+        "expectedOutput": "Hello, Asha"
+      },
+      {
+        "title": "Ask a question",
+        "instructions": "prompt() asks the person a question and gives back what they type. Ask for a name with prompt(\"Your name?\") and print a greeting for it. When this step is checked, the answer below is typed for you.",
+        "input": "Bikram\n",
+        "expectedOutput": "Hello, Bikram"
+      }
+    ]
+  },
+  {
+    "id": "web-decisions",
+    "title": "5. Choosing with if and else",
+    "summary": "JavaScript that does one thing or another.",
+    "steps": [
+      {
+        "title": "Pass or fail",
+        "instructions": "Ask for marks with prompt(). What comes back is text, so wrap it in Number() to get a number. If the marks are 40 or more print Pass with console.log, otherwise print Fail.",
+        "input": "55\n",
+        "expectedOutput": "Pass"
+      },
+      {
+        "title": "The other side",
+        "instructions": "Do not change your page. Check it again here, where the marks are 20. A page that only ever prints Pass will not get through this step.",
+        "input": "20\n",
+        "expectedOutput": "Fail"
+      },
+      {
+        "title": "Even or odd",
+        "instructions": "Ask for a whole number. Print Even if it divides by 2 with nothing left over, otherwise print Odd. The % sign gives the remainder of a division.",
+        "input": "8\n",
+        "expectedOutput": "Even"
+      }
+    ]
+  },
+  {
+    "id": "web-change-page",
+    "title": "6. JavaScript changes the page",
+    "summary": "Loops, and writing onto the page from a script.",
+    "steps": [
+      {
+        "title": "Count to five",
+        "instructions": "Print the numbers 1 to 5 in the console, one on each line, with a for loop: for (let i = 1; i <= 5; i++) { ... }",
+        "input": "",
+        "expectedOutput": "1\n2\n3\n4\n5"
+      },
+      {
+        "title": "Write onto the page",
+        "instructions": "Start a new page with <h1 id=\"title\">Old words</h1>. Under it, in a script, change the heading: document.getElementById(\"title\").textContent = \"New words\"; The page now shows the new words.",
+        "input": "",
+        "expectedOutput": "New words"
+      },
+      {
+        "title": "Greet by name on the page",
+        "instructions": "Keep the heading with id=\"title\". Ask for a name with prompt() and put a greeting for it into the heading, so the page shows the line below.",
+        "input": "Asha\n",
+        "expectedOutput": "Welcome, Asha!"
+      }
+    ]
+  }
+]

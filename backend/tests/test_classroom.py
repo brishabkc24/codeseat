@@ -22,6 +22,7 @@ from app.rooms import (
     ClassroomStore,
     RoomError,
     outputs_match,
+    page_shows,
 )
 from app.storage import SqliteStorage as Storage, TeacherRecord
 
@@ -62,11 +63,11 @@ def sign_up(client, **changes):
     return response.json()["teacher"]
 
 
-def open_class(client, rows=2, cols=3):
+def open_class(client, rows=2, cols=3, **more):
     """A class of the signed-in teacher; signs one up first when the client has no session."""
     if client.get("/api/session").json()["teacher"] is None:
         sign_up(client)
-    response = client.post("/api/classes", json={"title": "Intro to Python", "rows": rows, "cols": cols})
+    response = client.post("/api/classes", json={"title": "Intro to Python", "rows": rows, "cols": cols, **more})
     assert response.status_code == 201, response.text
     return response.json()
 
@@ -129,7 +130,7 @@ def seats_with(desk, wanted):
 def test_create_and_look_up_a_class(client):
     room = open_class(client)
     assert len(room["code"]) == 6
-    assert set(room) == {"code", "title", "rows", "cols"}
+    assert set(room) == {"code", "title", "rows", "cols", "language"}
 
     found = client.get(f"/api/classes/{room['code'].lower()}")  # codes are not case sensitive
     assert found.status_code == 200
@@ -138,6 +139,7 @@ def test_create_and_look_up_a_class(client):
         "title": "Intro to Python",
         "rows": 2,
         "cols": 3,
+        "language": "python",
         "seatsTaken": 0,
     }
 
@@ -744,6 +746,82 @@ def test_hand_tickets_carry_on_after_a_reload():
     assert again.hand_places() == {bikram.id: 1, chandra.id: 2, asha.id: 3}
 
 
+# ---------------------------------------------------------------- web classes
+
+
+def test_a_class_is_for_python_unless_it_says_web(client):
+    assert open_class(client)["language"] == "python"
+    web = open_class(client, language="web")
+    assert web["language"] == "web"
+    assert client.get(f"/api/classes/{web['code']}").json()["language"] == "web"
+    with student(client, web["code"], "Asha") as asha:
+        assert asha.welcome["class"]["language"] == "web"
+    listed = {item["code"]: item["language"] for item in client.get("/api/classes").json()["classes"]}
+    assert listed[web["code"]] == "web"
+
+    refused = client.post("/api/classes", json={"title": "x", "rows": 1, "cols": 1, "language": "cobol"})
+    assert refused.status_code == 400
+    assert refused.json()["detail"] == "A class is for Python or for web pages."
+
+    # The language is kept with the class.
+    main.store.flush()
+    main.store = ClassroomStore(main.store.storage)
+    assert main.store.get(web["code"]).language == "web"
+
+
+def test_in_a_web_class_a_step_passes_on_the_console_or_on_the_page(client):
+    room = open_class(client, language="web")
+    with teacher(client, room) as desk, student(client, room["code"], "Asha") as asha:
+        heading, greet = set_steps(
+            desk,
+            [
+                {"title": "A heading and a line", "expectedOutput": "My page\nHello there"},
+                {"title": "Say it in the console", "expectedOutput": "Hello"},
+            ],
+        )["steps"]
+        sit(asha, 0)
+
+        def web_check(step, output, page, status="ok"):
+            asha.send_json({"type": "check", "step": step["id"], "status": status, "output": output, "page": page})
+            return next_of(asha, "check")["passed"]
+
+        # The page shows the lines: how far apart they stand, and spaces around them, do not count.
+        assert web_check(heading, "", "My page\n\n   Hello   there  \n") is True
+        # The console is another way to meet a step.
+        assert web_check(greet, "Hello\n", "nothing to do with it") is True
+        # Neither the console nor the page has it.
+        assert web_check(heading, "My page", "My page") is False
+        # A page whose script broke does not pass, whatever it shows.
+        assert web_check(heading, "", "My page\nHello there", status="error") is False
+        asha.send_json({"type": "check", "step": greet["id"], "status": "ok", "output": "", "page": 7})
+        assert next_of(asha, "error")["message"] == "The page must be text."
+
+
+def test_in_a_python_class_the_page_is_not_looked_at(client):
+    room = open_class(client)
+    with teacher(client, room) as desk, student(client, room["code"], "Asha") as asha:
+        (hello,) = set_steps(desk, [STEP])["steps"]
+        sit(asha, 0)
+        asha.send_json({"type": "check", "step": hello["id"], "status": "ok", "output": "", "page": "Hello, world!"})
+        assert next_of(asha, "check")["passed"] is False
+
+
+@pytest.mark.parametrize(
+    ("expected", "page", "shown"),
+    [
+        ("Hello", "Hello", True),
+        ("A\nB", "A\n\n\nB\n", True),  # block elements stand apart on a page
+        ("A  B", " A B ", True),  # runs of spaces are one space on a page
+        ("A\nB", "B\nA", False),  # order counts
+        ("A\nB", "A B", False),  # lines are lines
+        ("Hello", "hello", False),  # case counts
+        ("", "", True),
+    ],
+)
+def test_page_shows_rules(expected, page, shown):
+    assert page_shows(expected, page) is shown
+
+
 # ---------------------------------------------------------------- teacher accounts
 
 
@@ -848,6 +926,7 @@ def test_teacher_lists_and_deletes_own_classes(client):
         "title": "Intro to Python",
         "rows": 2,
         "cols": 3,
+        "language": "python",
         "students": 0,
         "steps": 0,
         "createdAt": ANY,

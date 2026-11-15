@@ -1,11 +1,11 @@
 # CodeSeat
 
-A live classroom for Python. Students take a seat on a map of the room and write
+A live classroom for Python and for web pages. Students take a seat on a map of the room and write
 code beside the teacher's editor, which updates as the teacher types. The teacher
 sees every seat at a glance and can open any seat to watch that student's code live.
 
-Python runs in each student's own browser (Pyodide), so the server never executes
-anyone's code.
+Python runs in each student's own browser (Pyodide), and a web page runs in a
+sandboxed frame there, so the server never executes anyone's code.
 
 **Try it: https://codeseat.onrender.com** It runs on free hosting, which sleeps when
 nobody is using it, so the first visit after a quiet spell takes about a minute to load.
@@ -42,6 +42,26 @@ Milestone 3, teacher accounts and saved classes, works locally:
 - The classes page lists a teacher's classes with their counts, makes new ones and
   deletes old ones
 - Students still need only the code and a name
+
+A class is made for Python or for web pages (HTML, with its CSS and JavaScript in
+the same file). In a web class:
+
+- The page shows itself beside the editor as it is typed, with what it writes to the
+  console underneath. Errors name the student's own line
+- The page runs in a sandboxed frame: it cannot reach CodeSeat, the login cookie or
+  the browser's storage
+- A lesson step passes when the console prints the expected lines or the page shows
+  them, so both JavaScript and HTML can be set as steps. Styling cannot be checked;
+  the teacher looks at it
+- The teacher's page, and any student's, can be looked at as code or as the page it
+  makes. In that view scripts are off, so someone else's endless loop or pop-ups
+  cannot freeze the person looking
+- Six ready-made lessons cover first pages, lists and links, CSS, first JavaScript,
+  if and else, and changing the page from a script
+
+Limits of web classes: one file per student, a page's own endless loop can still
+freeze that student's tab (a reload brings the code back), and pictures or scripts
+from other sites load only if those sites allow it.
 
 The teacher also sees who needs help:
 
@@ -135,6 +155,7 @@ many at once. Each run against a live site leaves one test teacher account behin
 | Server | `backend/app/main.py` | REST for accounts and classes, one WebSocket per person in a class |
 | Live connection | `frontend/src/lib/useClassroom.ts` | Mirrors the class state and reconnects when the link drops |
 | Python runner | `frontend/public/py-worker.js` | Pyodide in a Web Worker, so an endless loop cannot freeze the page |
+| Web page runner | `frontend/src/lib/useWebPage.ts` | A sandboxed frame with a listener in front of the page for its console, errors and text |
 | Screens | `frontend/src/pages/` | Start page, student room, teacher room |
 
 ## Putting it online

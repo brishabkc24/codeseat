@@ -1,4 +1,4 @@
-import type { ClassInfo, ClassSummary, Teacher } from "./protocol";
+import type { ClassInfo, ClassSummary, Language, Teacher } from "./protocol";
 
 export class ApiError extends Error {
   /** The HTTP status, or 0 when the server could not be reached. */
@@ -69,8 +69,8 @@ export async function listClasses(): Promise<ClassSummary[]> {
   return reply.classes;
 }
 
-export function createClass(title: string, rows: number, cols: number): Promise<ClassInfo> {
-  return request<ClassInfo>("/api/classes", posting({ title, rows, cols }));
+export function createClass(title: string, rows: number, cols: number, language: Language): Promise<ClassInfo> {
+  return request<ClassInfo>("/api/classes", posting({ title, rows, cols, language }));
 }
 
 export function deleteClass(code: string): Promise<void> {

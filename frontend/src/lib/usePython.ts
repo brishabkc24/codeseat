@@ -19,13 +19,13 @@ type WorkerMessage =
   | { type: "done"; id: number; status: "ok" | "error" | "limit" };
 
 /** Adds a message from CodeSeat on a line of its own. */
-function withNote(current: OutputChunk[], text: string): OutputChunk[] {
+export function withNote(current: OutputChunk[], text: string): OutputChunk[] {
   const last = current[current.length - 1];
   const midLine = last !== undefined && !last.text.endsWith("\n");
   return merge(current, [{ stream: "note", text: `${midLine ? "\n" : ""}${text}\n` }]);
 }
 
-function merge(current: OutputChunk[], incoming: OutputChunk[]): OutputChunk[] {
+export function merge(current: OutputChunk[], incoming: OutputChunk[]): OutputChunk[] {
   const next = current.slice();
   for (const chunk of incoming) {
     const last = next[next.length - 1];
@@ -46,8 +46,10 @@ export type RunOptions = {
 /**
  * Python in a Web Worker (see public/py-worker.js). `onFinish` is told how
  * each run ended and everything it printed; a run the user stopped is not reported.
+ * With `enabled` false nothing is started: a class that writes web pages has
+ * no use for a 13 MB Python runtime.
  */
-export function usePython(onFinish?: (result: RunResult, output: OutputChunk[]) => void) {
+export function usePython(onFinish?: (result: RunResult, output: OutputChunk[]) => void, enabled = true) {
   const [phase, setPhaseState] = useState<PythonPhase>("loading");
   const phaseRef = useRef<PythonPhase>("loading");
   const setPhase = useCallback((next: PythonPhase) => {
@@ -131,12 +133,13 @@ export function usePython(onFinish?: (result: RunResult, output: OutputChunk[]) 
   }, [setPhase, setOutput]);
 
   useEffect(() => {
+    if (!enabled) return;
     boot();
     return () => {
       workerRef.current?.terminate();
       workerRef.current = null;
     };
-  }, [boot]);
+  }, [boot, enabled]);
 
   const run = useCallback(
     (source: string, options: RunOptions = {}) => {

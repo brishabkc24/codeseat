@@ -34,6 +34,8 @@ IDLE_SECONDS = 2 * 60 * 60  # a classroom nobody has touched for this long leave
 STUDENT_IDLE_SECONDS = 3 * 60  # a seated student who has not typed or run anything for this long shows as idle
 STUCK_AFTER = 3  # failed tries in a row (crashes, or checks that did not pass) before a seat shows as stuck
 RUN_STATES = ("ok", "error")
+# What a class writes: Python programs, or web pages (HTML with its CSS and JavaScript).
+LANGUAGES = ("python", "web")
 
 
 class RoomError(Exception):
@@ -75,6 +77,19 @@ def tidy_output(text: str) -> str:
 
 def outputs_match(expected: str, actual: str) -> bool:
     return tidy_output(expected) == tidy_output(actual)
+
+
+def page_shows(expected: str, page: str) -> bool:
+    """Whether a web page's visible text is the expected lines, in order.
+
+    Blank lines and the spaces around a line do not count: how far apart a
+    page sets its paragraphs is a matter of styling, not of what it says.
+    """
+
+    def lines(text: str) -> list[str]:
+        return [" ".join(line.split()) for line in text.splitlines() if line.strip()]
+
+    return lines(expected) == lines(page)
 
 
 @dataclass
@@ -137,6 +152,7 @@ class Classroom:
     rows: int
     cols: int
     teacher_id: str
+    language: str = "python"
     teacher_source: str = ""
     created_at: float = field(default_factory=time.time)
     students: dict[str, Student] = field(default_factory=dict)
@@ -151,7 +167,13 @@ class Classroom:
         return self.rows * self.cols
 
     def info(self) -> dict:
-        return {"code": self.code, "title": self.title, "rows": self.rows, "cols": self.cols}
+        return {
+            "code": self.code,
+            "title": self.title,
+            "rows": self.rows,
+            "cols": self.cols,
+            "language": self.language,
+        }
 
     def lesson(self) -> dict:
         return {"steps": [step.info() for step in self.steps], "currentStep": self.current_step}
@@ -333,14 +355,23 @@ class Classroom:
             self.current_step = current
             self.dirty = True
 
-    def check(self, student: Student, step: Step, status: object, output: object) -> bool:
-        """Judge a run the student made for a step. A pass, once earned, stays."""
+    def check(self, student: Student, step: Step, status: object, output: object, page: object = None) -> bool:
+        """Judge a run the student made for a step. A pass, once earned, stays.
+
+        `output` is what the program printed. In a web class `page` is the text the
+        page shows, and a step passes on either: a step about JavaScript is met in
+        the console, a step about HTML on the page.
+        """
         if status not in RUN_STATES:
             raise RoomError("Unknown run result.")
         if not isinstance(output, str):
             raise RoomError("Output must be text.")
+        if page is not None and not isinstance(page, str):
+            raise RoomError("The page must be text.")
         self.record_run(student, status)
         passed = status == "ok" and outputs_match(step.expected_output, output[:MAX_CHECK_OUTPUT])
+        if not passed and status == "ok" and page is not None and self.language == "web":
+            passed = page_shows(step.expected_output, page[:MAX_CHECK_OUTPUT])
         if passed:
             student.passed.add(step.id)
             student.misses = 0
@@ -378,6 +409,7 @@ class Classroom:
     def state(self) -> dict:
         """Everything worth keeping between server runs. Who is online is not."""
         return {
+            "language": self.language,
             "teacherSource": self.teacher_source,
             "steps": [step.info() for step in self.steps],
             "currentStep": self.current_step,
@@ -419,6 +451,7 @@ class Classroom:
             rows=record.rows,
             cols=record.cols,
             teacher_id=record.teacher_id,
+            language=state.get("language", "python"),
             teacher_source=state.get("teacherSource", ""),
             created_at=record.created_at,
         )
@@ -464,11 +497,15 @@ class ClassroomStore:
         self._rooms: dict[str, Classroom] = {}
         self._deleted: set[str] = set()  # codes of deleted classes, so a late save cannot bring one back
 
-    def create(self, teacher_id: str, title: object, rows: int, cols: int) -> Classroom:
+    def create(self, teacher_id: str, title: object, rows: int, cols: int, language: object = "python") -> Classroom:
         clean = clean_text(title, MAX_TITLE, "The class name")
         if not 1 <= rows <= MAX_ROWS or not 1 <= cols <= MAX_COLS:
             raise RoomError(f"A classroom can have up to {MAX_ROWS} rows and {MAX_COLS} seats per row.")
-        room = Classroom(code=self._new_code(), title=clean, rows=rows, cols=cols, teacher_id=teacher_id)
+        if language not in LANGUAGES:
+            raise RoomError("A class is for Python or for web pages.")
+        room = Classroom(
+            code=self._new_code(), title=clean, rows=rows, cols=cols, teacher_id=teacher_id, language=language
+        )
         self._rooms[room.code] = room
         self.storage.save_class(room.record())
         return room
@@ -511,6 +548,7 @@ class ClassroomStore:
                     "title": record.title,
                     "rows": record.rows,
                     "cols": record.cols,
+                    "language": record.state.get("language", "python"),
                     "students": students,
                     "steps": steps,
                     "createdAt": record.created_at,

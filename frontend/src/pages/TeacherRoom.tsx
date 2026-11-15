@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { CodeEditor } from "../components/CodeEditor";
 import { LessonEditor, type StepDraft } from "../components/LessonEditor";
+import { PagePanel, PagePreview } from "../components/PagePanel";
 import { RoomClosed, RoomLoading } from "../components/RoomStates";
 import { RunPanel } from "../components/RunPanel";
 import { SeatMap } from "../components/SeatMap";
@@ -12,6 +13,7 @@ import { helpQueue, seatWords } from "../lib/seats";
 import { useSession } from "../lib/session";
 import { useClassroom } from "../lib/useClassroom";
 import { usePython } from "../lib/usePython";
+import { useWebPage } from "../lib/useWebPage";
 import { useThrottledSend } from "../lib/useThrottledSend";
 
 export function TeacherRoom() {
@@ -97,8 +99,22 @@ function TeacherDesk({ code, teacherName }: { code: string; teacherName: string 
     };
   }, [hands]);
 
-  const python = usePython();
-  const runNow = () => python.run(sourceRef.current);
+  // The class writes Python or web pages; only the runner it needs is started.
+  const isWeb = room?.language === "web";
+  const python = usePython(undefined, room?.language === "python");
+  const web = useWebPage();
+  const startPage = web.start;
+  const runNow = () => (isWeb ? startPage(sourceRef.current, "run") : python.run(sourceRef.current));
+
+  // A web page shows itself as it is typed, a moment after the typing stops.
+  useEffect(() => {
+    if (!isWeb || !adopted) return;
+    const timer = window.setTimeout(() => startPage(source, "preview"), 600);
+    return () => window.clearTimeout(timer);
+  }, [isWeb, adopted, source, startPage]);
+
+  // In a web class a student's code can be looked at as code or as the page it makes.
+  const [studentView, setStudentView] = useState<"code" | "page">("code");
 
   // "manual" means the browser refused clipboard access, so the link is shown to copy by hand.
   const [share, setShare] = useState<"" | "copied" | "manual">("");
@@ -153,6 +169,7 @@ function TeacherDesk({ code, teacherName }: { code: string; teacherName: string 
         <main className="lesson-page">
           <LessonEditor
             steps={steps}
+            language={room.language}
             saving={pendingSince !== null}
             notice={classroom.notice}
             onSave={saveLesson}
@@ -184,9 +201,10 @@ function TeacherDesk({ code, teacherName }: { code: string; teacherName: string 
               label="Your code, shown to students live"
               onRun={runNow}
               placeholder="Type here. Every student sees it as you type."
+              language={room.language}
             />
           </div>
-          <RunPanel python={python} onRun={runNow} />
+          {isWeb ? <PagePanel web={web} onRun={runNow} /> : <RunPanel python={python} onRun={runNow} />}
         </section>
 
         <section className="pane desk" aria-label="The classroom">
@@ -338,6 +356,15 @@ function TeacherDesk({ code, teacherName }: { code: string; teacherName: string 
                     <span className={watched.online && watched.hand ? "status status--warn" : "status"} role="status">
                       {seatWords(watched)}
                     </span>
+                    {isWeb && (
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => setStudentView(studentView === "code" ? "page" : "code")}
+                      >
+                        {studentView === "code" ? "Show page" : "Show code"}
+                      </button>
+                    )}
                     {watched.hand != null && (
                       <button
                         type="button"
@@ -391,12 +418,15 @@ function TeacherDesk({ code, teacherName }: { code: string; teacherName: string 
                 <div className="pane__body">
                   {watchedText === null ? (
                     <div className="skeleton viewer__loading" aria-busy="true" />
+                  ) : isWeb && studentView === "page" ? (
+                    <PagePreview source={watchedText} title={`${watched.name}’s page`} />
                   ) : (
                     <CodeEditor
                       value={watchedText}
                       label={`${watched.name}’s code, read only`}
                       readOnly
                       placeholder={`${watched.name} has not typed anything yet.`}
+                      language={room.language}
                     />
                   )}
                 </div>
