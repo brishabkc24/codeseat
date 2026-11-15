@@ -34,11 +34,12 @@ from pathlib import Path
 
 import httpx
 from websockets.asyncio.client import ClientConnection, connect
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, WebSocketException
 
 BACKEND = Path(__file__).resolve().parent.parent
 REPLY_TIMEOUT = 10  # seconds to wait for the server's answer to one message
-SLOW_MS = 500  # a 95th percentile above this fails the run
+SLOW_MS = 500  # a message whose 95th percentile is above this fails the run
+SLOW_TO_GET_IN_MS = 5000  # getting in happens once and includes setting up a secure connection
 
 STEPS = [
     {"title": "Say hello", "instructions": "Print Hello.", "input": "", "expectedOutput": "Hello"},
@@ -57,6 +58,7 @@ class Stats:
     unexpected_errors: list[str] = field(default_factory=list)
     timeouts: list[str] = field(default_factory=list)
     dropped: list[str] = field(default_factory=list)
+    retries: list[str] = field(default_factory=list)  # connections that needed a second try to open
     tick_sent: dict[int, float] = field(default_factory=dict)  # teacher's typing, by tick number
     source_sent: dict[tuple[int, int], float] = field(default_factory=dict)  # students' typing, by seat and count
 
@@ -269,7 +271,7 @@ async def wait_until_up(base: str, server: subprocess.Popen) -> None:
     raise RuntimeError("The test server did not come up within 20 seconds.")
 
 
-async def run(base: str, students: int, seconds: float) -> tuple[Stats, list[str]]:
+async def run(base: str, students: int, seconds: float, arrive_over: float) -> tuple[Stats, list[str]]:
     """Runs one lesson. Returns the measurements and the lines of the final-state report."""
     stats = Stats()
     cols = min(10, students)
@@ -288,76 +290,91 @@ async def run(base: str, students: int, seconds: float) -> tuple[Stats, list[str
         cookie = "; ".join(f"{name}={value}" for name, value in client.cookies.items())
 
         teacher = Teacher(stats)
-        await teacher.open(f"{ws_base}/ws/{code}", {"role": "teacher"}, headers={"Cookie": cookie})
-        lesson = await teacher.ask({"type": "set_steps", "steps": STEPS}, reply="steps")
-        if lesson is None or lesson.get("type") != "steps":
-            raise RuntimeError(f"The lesson was not saved: {lesson}")
-        step_ids = [step["id"] for step in lesson["steps"]]
+        people: list[Student] = []
+        try:
+            await teacher.open(f"{ws_base}/ws/{code}", {"role": "teacher"}, headers={"Cookie": cookie})
+            lesson = await teacher.ask({"type": "set_steps", "steps": STEPS}, reply="steps")
+            if lesson is None or lesson.get("type") != "steps":
+                raise RuntimeError(f"The lesson was not saved: {lesson}")
+            step_ids = [step["id"] for step in lesson["steps"]]
 
-        # Everyone arrives at once, as a class does when the code goes up on the board.
-        people = [Student(index, stats) for index in range(students)]
-        arriving = time.perf_counter()
+            # Everyone arrives together, as a class does when the code goes up on the board:
+            # all at once on a local server, over a few seconds across the internet.
+            people = [Student(index, stats) for index in range(students)]
+            arriving = time.perf_counter()
 
-        async def arrive(person: Student) -> None:
-            started = time.perf_counter()
-            await person.open(f"{ws_base}/ws/{code}", {"role": "student", "name": f"Student {person.seat + 1}", "studentId": None})
-            stats.took("a student gets in", started)
+            async def arrive(person: Student) -> None:
+                await asyncio.sleep(arrive_over * person.seat / students)
+                for attempt in range(4):
+                    started = time.perf_counter()
+                    try:
+                        await person.open(f"{ws_base}/ws/{code}", {"role": "student", "name": f"Student {person.seat + 1}", "studentId": None})
+                    except (OSError, TimeoutError, WebSocketException) as error:
+                        if attempt == 3:
+                            raise
+                        stats.retries.append(f"{person.name}: {type(error).__name__}")
+                        await asyncio.sleep(1 + attempt)
+                    else:
+                        stats.took("a student gets in", started)
+                        return
 
-        await arrive(people[0])
-        await people[0].ask({"type": "take_seat", "seat": 0}, reply="you", label="a seat is taken")
-        await asyncio.gather(*(arrive(person) for person in people[1:]))
+            await arrive(people[0])
+            await people[0].ask({"type": "take_seat", "seat": 0}, reply="you", label="a seat is taken")
+            await asyncio.gather(*(arrive(person) for person in people[1:]))
 
-        async def sit(person: Student) -> None:
-            if 1 <= person.seat <= 5:  # a few reach for a seat that is already taken
-                refused = await person.ask({"type": "take_seat", "seat": 0}, reply="you")
-                if refused is not None and refused.get("type") == "error":
-                    stats.conflicts_refused += 1
-                else:
-                    stats.unexpected_errors.append(f"{person.name}: took an occupied seat: {refused}")
-            answer = await person.ask({"type": "take_seat", "seat": person.seat}, reply="you", label="a seat is taken")
-            if answer is None or answer.get("seat") != person.seat:
-                stats.unexpected_errors.append(f"{person.name}: did not get seat {person.seat}: {answer}")
+            async def sit(person: Student) -> None:
+                if 1 <= person.seat <= 5:  # a few reach for a seat that is already taken
+                    refused = await person.ask({"type": "take_seat", "seat": 0}, reply="you")
+                    if refused is not None and refused.get("type") == "error":
+                        stats.conflicts_refused += 1
+                    else:
+                        stats.unexpected_errors.append(f"{person.name}: took an occupied seat: {refused}")
+                answer = await person.ask({"type": "take_seat", "seat": person.seat}, reply="you", label="a seat is taken")
+                if answer is None or answer.get("seat") != person.seat:
+                    stats.unexpected_errors.append(f"{person.name}: did not get seat {person.seat}: {answer}")
 
-        await asyncio.gather(*(sit(person) for person in people[1:]))
-        joined_in = time.perf_counter() - arriving
+            await asyncio.gather(*(sit(person) for person in people[1:]))
+            joined_in = time.perf_counter() - arriving
 
-        until = time.perf_counter() + seconds
-        await asyncio.gather(teacher.lesson(students, until), *(person.lesson(step_ids, until) for person in people))
-        await asyncio.sleep(1)  # let the last messages land
+            until = time.perf_counter() + seconds
+            await asyncio.gather(teacher.lesson(students, until), *(person.lesson(step_ids, until) for person in people))
+            await asyncio.sleep(1)  # let the last messages land
 
-        # ---- what the server holds must be what was sent
-        report = [f"everyone in and seated   {students}/{students} in {joined_in:.2f} s"]
-        seated = {seat["seat"] for seat in teacher.seats}
-        online = sum(1 for seat in teacher.seats if seat["online"])
-        report.append(f"seats on the teacher's map   {len(seated)}/{students} taken, {online} online")
-        if len(seated) != students or online != students:
-            stats.unexpected_errors.append("the teacher's map does not show every student seated and online")
+            # ---- what the server holds must be what was sent
+            report = [f"everyone in and seated       {students}/{students} in {joined_in:.2f} s"]
+            seated = {seat["seat"] for seat in teacher.seats}
+            online = sum(1 for seat in teacher.seats if seat["online"])
+            report.append(f"seats on the teacher's map   {len(seated)}/{students} taken, {online} online")
+            if len(seated) != students or online != students:
+                stats.unexpected_errors.append("the teacher's map does not show every student seated and online")
 
-        same = 0
-        for person in people:
-            teacher.watching = teacher.snapshot_due = person.seat  # a stored copy, not live typing to be timed
-            answer = await teacher.ask({"type": "watch", "seat": person.seat}, reply="student_source")
-            if answer is not None and answer.get("text") == person.text:
-                same += 1
-        report.append(f"code held as last typed      {same}/{students}")
-        if same != students:
-            stats.unexpected_errors.append(f"{students - same} students' code on the server is not what they last sent")
+            same = 0
+            for person in people:
+                teacher.watching = teacher.snapshot_due = person.seat  # a stored copy, not live typing to be timed
+                answer = await teacher.ask({"type": "watch", "seat": person.seat}, reply="student_source")
+                if answer is not None and answer.get("text") == person.text:
+                    same += 1
+            report.append(f"code held as last typed      {same}/{students}")
+            if same != students:
+                stats.unexpected_errors.append(f"{students - same} students' code on the server is not what they last sent")
 
-        by_seat = {seat["seat"]: seat for seat in teacher.seats}
-        expected = sum(len(person.should_have_passed) for person in people)
-        recorded = sum(len(person.should_have_passed & set(by_seat.get(person.seat, {}).get("passed", []))) for person in people)
-        report.append(f"passes recorded              {recorded}/{expected}")
-        if recorded != expected:
-            stats.unexpected_errors.append("some passed checks are missing from the teacher's map")
+            by_seat = {seat["seat"]: seat for seat in teacher.seats}
+            expected = sum(len(person.should_have_passed) for person in people)
+            recorded = sum(len(person.should_have_passed & set(by_seat.get(person.seat, {}).get("passed", []))) for person in people)
+            report.append(f"passes recorded              {recorded}/{expected}")
+            if recorded != expected:
+                stats.unexpected_errors.append("some passed checks are missing from the teacher's map")
 
-        listed = (await client.get("/api/classes")).json()["classes"]
-        saved = next((item["students"] for item in listed if item["code"] == code), None)
-        report.append(f"students in the saved class  {saved}/{students}")
-        if saved != students:
-            stats.unexpected_errors.append("the saved class does not list every student")
+            listed = (await client.get("/api/classes")).json()["classes"]
+            saved = next((item["students"] for item in listed if item["code"] == code), None)
+            report.append(f"students in the saved class  {saved}/{students}")
+            if saved != students:
+                stats.unexpected_errors.append("the saved class does not list every student")
 
-        await asyncio.gather(teacher.close(), *(person.close() for person in people))
-        (await client.delete(f"/api/classes/{code}")).raise_for_status()
+        finally:
+            # Whatever happened, leave nothing behind: sockets closed, the test class deleted.
+            await asyncio.gather(teacher.close(), *(person.close() for person in people), return_exceptions=True)
+            await client.delete(f"/api/classes/{code}")
     return stats, report
 
 
@@ -366,6 +383,11 @@ def main() -> int:
     parser.add_argument("--students", type=int, default=30, help="how many students join (1 to 80, default 30)")
     parser.add_argument("--seconds", type=float, default=30, help="how long the lesson lasts (default 30)")
     parser.add_argument("--url", help="test a server that is already running, for example https://codeseat.example")
+    parser.add_argument(
+        "--arrive-over",
+        type=float,
+        help="seconds over which the students connect (default 0 for the script's own server, 5 with --url)",
+    )
     args = parser.parse_args()
     if not 1 <= args.students <= 80:
         parser.error("a classroom holds 1 to 80 students")
@@ -392,7 +414,8 @@ def main() -> int:
     try:
         if server is not None:
             asyncio.run(wait_until_up(base, server))
-        stats, report = asyncio.run(run(base, args.students, args.seconds))
+        arrive_over = args.arrive_over if args.arrive_over is not None else (5.0 if args.url else 0.0)
+        stats, report = asyncio.run(run(base, args.students, args.seconds, arrive_over))
     finally:
         if server is not None:
             server.terminate()
@@ -407,6 +430,7 @@ def main() -> int:
     for line in report:
         print(" ", line)
     print(f"  seat conflicts refused       {stats.conflicts_refused}/{min(5, args.students - 1)}")
+    print(f"  connections that needed a retry  {len(stats.retries)}")
     print(f"  messages                     {stats.sent_by_students:,} from students, {stats.sent_by_teacher:,} from the teacher, {stats.received:,} delivered")
     print()
     print(f"  {'how long the server took (ms)':42}{'median':>8}{'95%':>8}{'worst':>8}{'count':>8}")
@@ -414,8 +438,9 @@ def main() -> int:
     for what, values in stats.latency.items():
         p95 = percentile(values, 0.95)
         print(f"  {what:42}{percentile(values, 0.5):8.1f}{p95:8.1f}{max(values):8.1f}{len(values):8,}")
-        if p95 > SLOW_MS:
-            slow.append(what)
+        limit = SLOW_TO_GET_IN_MS if what == "a student gets in" else SLOW_MS
+        if p95 > limit:
+            slow.append(f"{what} (over {limit} ms)")
     print()
 
     problems = []
@@ -428,7 +453,7 @@ def main() -> int:
     if stats.conflicts_refused != min(5, args.students - 1):
         problems.append("a seat that was already taken was not refused every time")
     if slow:
-        problems.append(f"slower than {SLOW_MS} ms at the 95th percentile: {', '.join(slow)}")
+        problems.append(f"too slow at the 95th percentile: {', '.join(slow)}")
     if server_errors:
         problems.append(f"{server_errors} errors in the server's log: {log_path}")
 

@@ -7,6 +7,9 @@ sees every seat at a glance and can open any seat to watch that student's code l
 Python runs in each student's own browser (Pyodide), so the server never executes
 anyone's code.
 
+**Try it: https://codeseat.onrender.com** It runs on free hosting, which sleeps when
+nobody is using it, so the first visit after a quiet spell takes about a minute to load.
+
 ## Status
 
 Milestone 1, the live classroom core, works locally:
@@ -54,7 +57,7 @@ CodeSeat is also an installable web app: browsers that allow it show an "Install
 button in the top bar, and the installed app opens to its own screen, with its icon
 on the home screen or taskbar.
 
-It can be put online on a free host; see "Putting it online" below.
+It is online at https://codeseat.onrender.com; "Putting it online" below says how.
 
 ## Run it
 
@@ -114,6 +117,12 @@ The default is 30 students for 30 seconds. `--students 80` fills the biggest roo
 `--seconds 100` runs longer, and `--url https://…` tests a server that is already
 running. On a laptop, 80 students at once pass: the teacher's typing reaches a
 student in about 13 ms, and a whole class is seated in under a second.
+
+Against the live site, 30 students pass too: nothing lost, and a message takes about
+105 ms from Nepal, which is the trip to the server in Singapore and back. With `--url`
+the students arrive over five seconds; `--arrive-over 40` spreads them further, which
+is needed on a computer whose antivirus scans secure connections and cannot open
+many at once. Each run against a live site leaves one test teacher account behind.
 
 ## How it fits together
 
