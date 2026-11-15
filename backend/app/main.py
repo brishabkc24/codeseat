@@ -15,6 +15,7 @@ Messages the server sends:  welcome, seats, you, teacher_source, student_source,
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import secrets
@@ -44,6 +45,7 @@ from .storage import EmailTaken, Storage, TeacherRecord
 HELLO_TIMEOUT_SECONDS = 10
 SAVE_EVERY_SECONDS = 2
 PRESENCE_EVERY_SECONDS = 20  # how often teachers are told who has gone idle
+SEAT_NEWS_SECONDS = 0.1  # seat changes within this long reach students as one list
 SESSION_COOKIE = "codeseat_session"
 DEFAULT_DATABASE = Path(__file__).resolve().parent.parent / "data" / "codeseat.db"
 
@@ -67,8 +69,11 @@ class Connection:
         return self.student is None
 
     async def send(self, message: dict) -> None:
+        await self.send_text(json.dumps(message, separators=(",", ":")))
+
+    async def send_text(self, text: str) -> None:
         try:
-            await self.ws.send_json(message)
+            await self.ws.send_text(text)
         except Exception:
             # The socket is already closing; its own handler does the clean-up.
             pass
@@ -116,8 +121,9 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
-        for task in tasks:
+        for task in [*tasks, *seat_news.values()]:
             task.cancel()
+        seat_news.clear()
         store.flush()
 
 
@@ -158,6 +164,7 @@ store = ClassroomStore(Storage(os.environ.get("CODESEAT_DATABASE", DEFAULT_DATAB
 hub = Hub()
 brake = LoginBrake()
 presence_sent: dict[str, tuple] = {}  # per class, the idle marks teachers were last told about
+seat_news: dict[str, asyncio.Task] = {}  # per class, the bundled seat list on its way to students
 
 
 # ---------------------------------------------------------------- teachers
@@ -323,7 +330,9 @@ async def delete_class(code: str, teacher: TeacherRecord = Depends(require_teach
 
 async def broadcast(connections: list[Connection], message: dict) -> None:
     if connections:
-        await asyncio.gather(*(conn.send(message) for conn in connections))
+        # Encoded once for everyone: with a full room this is most of the work of a broadcast.
+        text = json.dumps(message, separators=(",", ":"))
+        await asyncio.gather(*(conn.send_text(text) for conn in connections))
 
 
 async def broadcast_seats_to_teachers(room: Classroom) -> None:
@@ -333,7 +342,22 @@ async def broadcast_seats_to_teachers(room: Classroom) -> None:
 
 
 async def broadcast_seats(room: Classroom) -> None:
+    """The teacher is told at once. Students are told a moment later, in one bundle."""
     await broadcast_seats_to_teachers(room)
+    if room.code not in seat_news:
+        seat_news[room.code] = asyncio.create_task(tell_students_the_seats(room))
+
+
+async def tell_students_the_seats(room: Classroom) -> None:
+    """Sends students the seat list once for all the changes of the last moment.
+
+    When a class sits down together every change would otherwise go to everyone:
+    eighty students taking seats is 6,400 lists. Bundled, it is a handful.
+    """
+    try:
+        await asyncio.sleep(SEAT_NEWS_SECONDS)
+    finally:
+        seat_news.pop(room.code, None)
     await broadcast(hub.students(room.code), {"type": "seats", "seats": room.seats(for_teacher=False)})
 
 

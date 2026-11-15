@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from contextlib import contextmanager
 from unittest.mock import ANY
 
@@ -31,6 +32,7 @@ def client():
     main.hub = main.Hub()
     main.brake = LoginBrake()
     main.presence_sent = {}
+    main.seat_news = {}
     with TestClient(main.app) as test_client:
         yield test_client
 
@@ -246,6 +248,33 @@ def test_seat_shows_offline_after_the_student_disconnects(client):
             assert seats["seats"][0]["online"] is True
         seats = next_of(desk, "seats")
         assert seats["seats"] == [teacher_seat(0, "Asha", online=False)]
+
+
+def test_students_get_seat_changes_as_one_bundle(client):
+    room = open_class(client)
+    with student(client, room["code"], "Asha") as asha:
+        sit(asha, 0)
+
+        def quiet():
+            """Lets any bundle on its way arrive, then reads past everything up to a marker."""
+            time.sleep(main.SEAT_NEWS_SECONDS * 3)
+            asha.send_json({"type": "hand", "up": "marker"})
+            return next_of(asha, "error")
+
+        quiet()
+        live = main.store.get(room["code"])
+
+        async def three_changes():
+            for _ in range(3):
+                await main.broadcast_seats(live)
+            return len(main.seat_news)
+
+        assert client.portal.call(three_changes) == 1  # one bundle is on its way, not three
+        assert asha.receive_json()["type"] == "seats"
+        time.sleep(main.SEAT_NEWS_SECONDS * 3)
+        asha.send_json({"type": "hand", "up": "marker"})
+        assert asha.receive_json()["type"] == "error"  # nothing else arrived in between
+        assert main.seat_news == {}
 
 
 # ---------------------------------------------------------------- live code
