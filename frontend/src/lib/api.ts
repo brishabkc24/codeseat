@@ -88,7 +88,8 @@ export type AdminTeacher = Teacher & { createdAt: number; blocked: boolean; clas
 /** A class as the admin sees it: whose it is, and who is in it at this moment. */
 export type AdminClass = ClassSummary & { teacherId: string; teacherName: string; online: number; teacherHere: boolean };
 
-export type AdminOverview = { teachers: AdminTeacher[]; classes: AdminClass[] };
+/** `approval` says whether new accounts wait for the admin before they can make classes. */
+export type AdminOverview = { approval: boolean; teachers: AdminTeacher[]; classes: AdminClass[] };
 
 /** `configured` is false when the site has no admin password, which switches the page off. */
 export type AdminSession = { configured: boolean; admin: boolean };
@@ -115,6 +116,10 @@ export function adminEndClass(code: string): Promise<void> {
 
 export function adminBlock(teacherId: string, blocked: boolean): Promise<{ blocked: boolean }> {
   return request<{ blocked: boolean }>(`/api/admin/teachers/${encodeURIComponent(teacherId)}/block`, posting({ blocked }));
+}
+
+export function adminApprove(teacherId: string): Promise<void> {
+  return request<void>(`/api/admin/teachers/${encodeURIComponent(teacherId)}/approve`, { method: "POST" });
 }
 
 export function adminSetPassword(teacherId: string, password: string): Promise<void> {

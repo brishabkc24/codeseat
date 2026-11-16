@@ -437,6 +437,12 @@
   color: var(--color-muted);
 }
 
+/* Shown in place of the new-class form while the account waits for the admin. */
+.classes__waiting {
+  max-width: 60ch;
+  color: var(--color-ink-2);
+}
+
 .courses {
   list-style: none;
   margin: 0;
@@ -517,7 +523,9 @@
   color: var(--color-accent-2);
 }
 
-.admin__blocked {
+/* Something on a row that needs the admin's eye. */
+.admin__flag,
+.admin__note.admin__flag {
   color: var(--color-accent);
 }
 

@@ -191,6 +191,9 @@ signups_from_one_address = Throttle(SIGNUPS_PER_ADDRESS, 3600)
 signups_in_all = Throttle(SIGNUPS_IN_ALL, 3600)
 classes_by_one_teacher = Throttle(NEW_CLASSES_PER_TEACHER, 3600)
 ADMIN_PASSWORD = os.environ.get("CODESEAT_ADMIN_PASSWORD", "")
+# With an admin, a new account waits for the admin's approval before it can make
+# classes. CODESEAT_APPROVAL=off lets everyone straight in, as on a site with no admin.
+APPROVAL_OFF = os.environ.get("CODESEAT_APPROVAL", "").strip().lower() == "off"
 presence_sent: dict[str, tuple] = {}  # per class, the idle marks teachers were last told about
 seat_news: dict[str, asyncio.Task] = {}  # per class, the bundled seat list on its way to students
 
@@ -210,7 +213,7 @@ class LogIn(BaseModel):
 
 
 def public(teacher: TeacherRecord) -> dict:
-    return {"id": teacher.id, "name": teacher.name, "email": teacher.email}
+    return {"id": teacher.id, "name": teacher.name, "email": teacher.email, "approved": teacher.approved}
 
 
 def session_teacher(request: Request) -> TeacherRecord | None:
@@ -259,6 +262,7 @@ def sign_up(body: SignUp, request: Request, response: Response) -> dict:
         email=email,
         password_hash=hash_password(password),
         created_at=time.time(),
+        approved=not approval_needed(),
     )
     try:
         store.storage.add_teacher(teacher)
@@ -332,6 +336,11 @@ def my_classes(teacher: TeacherRecord = Depends(require_teacher)) -> dict:
 
 @app.post("/api/classes", status_code=201)
 def create_class(body: NewClass, teacher: TeacherRecord = Depends(require_teacher)) -> dict:
+    if not teacher.approved:
+        raise HTTPException(
+            status_code=403,
+            detail="Your account is waiting for the site's admin to approve it. You can make classes after that.",
+        )
     if not classes_by_one_teacher.allow(teacher.id):
         raise HTTPException(status_code=429, detail="That is a lot of new classes. Try again in an hour.")
     try:
@@ -380,6 +389,11 @@ class NewPassword(BaseModel):
 
 def admin_configured() -> bool:
     return len(ADMIN_PASSWORD) >= MIN_ADMIN_PASSWORD
+
+
+def approval_needed() -> bool:
+    """Whether a new account must wait for the admin. Without an admin nobody could approve it."""
+    return admin_configured() and not APPROVAL_OFF
 
 
 def is_admin(request: Request) -> bool:
@@ -440,6 +454,7 @@ def admin_overview() -> dict:
         item["online"] = len(hub.students(item["code"]))  # students connected at this moment
         item["teacherHere"] = bool(hub.teachers(item["code"]))
     return {
+        "approval": approval_needed(),
         "teachers": [
             {**public(teacher), "createdAt": teacher.created_at, "blocked": teacher.blocked, "classes": owned.get(teacher.id, 0)}
             for teacher in teachers
@@ -472,6 +487,12 @@ async def admin_block(teacher_id: str, body: Block) -> dict:
             for conn in hub.teachers(record.code):
                 await close_quietly(conn.ws, CLOSE_NOT_TEACHER, "This account has been blocked.")
     return {"blocked": body.blocked}
+
+
+@app.post("/api/admin/teachers/{teacher_id}/approve", status_code=204, dependencies=[Depends(require_admin)])
+def admin_approve(teacher_id: str) -> None:
+    if not store.storage.set_approved(teacher_id, True):
+        raise HTTPException(status_code=404, detail="There is no such account.")
 
 
 @app.post("/api/admin/teachers/{teacher_id}/password", status_code=204, dependencies=[Depends(require_admin)])

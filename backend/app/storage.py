@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS teachers (
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     created_at DOUBLE PRECISION NOT NULL,
-    blocked INTEGER NOT NULL DEFAULT 0
+    blocked INTEGER NOT NULL DEFAULT 0,
+    approved INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,
@@ -61,6 +62,7 @@ class TeacherRecord:
     password_hash: str
     created_at: float
     blocked: bool = False  # set by the site's admin: cannot log in or open a desk
+    approved: bool = True  # False while a new account waits for the admin: it cannot make classes
 
 
 @dataclass
@@ -85,6 +87,7 @@ def _teacher(row: Mapping | None) -> TeacherRecord | None:
         password_hash=row["password_hash"],
         created_at=row["created_at"],
         blocked=bool(row["blocked"]),
+        approved=bool(row["approved"]),
     )
 
 
@@ -136,6 +139,8 @@ class Storage:
             for statement in SCHEMA.split(";"):
                 self._run(statement)
             self._ensure_column("teachers", "blocked", "INTEGER NOT NULL DEFAULT 0")
+            # Accounts from before approval existed count as approved.
+            self._ensure_column("teachers", "approved", "INTEGER NOT NULL DEFAULT 1")
 
     def _one(self, sql: str, values: tuple = ()) -> Mapping | None:
         with self._lock:
@@ -155,8 +160,17 @@ class Storage:
     def add_teacher(self, teacher: TeacherRecord) -> None:
         try:
             self._change(
-                "INSERT INTO teachers (id, name, email, password_hash, created_at) VALUES (?, ?, ?, ?, ?)",
-                (teacher.id, teacher.name, teacher.email, teacher.password_hash, teacher.created_at),
+                "INSERT INTO teachers (id, name, email, password_hash, created_at, blocked, approved)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    teacher.id,
+                    teacher.name,
+                    teacher.email,
+                    teacher.password_hash,
+                    teacher.created_at,
+                    1 if teacher.blocked else 0,
+                    1 if teacher.approved else 0,
+                ),
             )
         except Exception as error:
             if self._is_duplicate(error):
@@ -179,6 +193,10 @@ class Storage:
         if changed and blocked:
             self.delete_sessions_for(teacher_id)
         return changed
+
+    def set_approved(self, teacher_id: str, approved: bool) -> bool:
+        """Lets a waiting account make classes, or puts it back to waiting."""
+        return self._change("UPDATE teachers SET approved = ? WHERE id = ?", (1 if approved else 0, teacher_id)) > 0
 
     def set_password(self, teacher_id: str, password_hash: str) -> bool:
         """Replaces the password and ends every login made with the old one."""

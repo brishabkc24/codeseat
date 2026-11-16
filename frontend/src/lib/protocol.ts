@@ -5,7 +5,8 @@ export type Language = "python" | "web";
 
 export type ClassInfo = { code: string; title: string; rows: number; cols: number; language: Language };
 
-export type Teacher = { id: string; name: string; email: string };
+/** `approved` is false while a new account waits for the site's admin: it cannot make classes yet. */
+export type Teacher = { id: string; name: string; email: string; approved: boolean };
 
 /** A class as listed on the teacher's classes page. Times are seconds since 1970. */
 export type ClassSummary = ClassInfo & { students: number; steps: number; createdAt: number; updatedAt: number };

@@ -114,6 +114,17 @@ def test_the_admin_lists_blocks_and_removes_accounts(storage):
     assert storage.teacher_for_session("hash-c", now=150.0) == older
     assert storage.set_blocked("t9", True) is False
 
+    # A waiting account is stored as waiting, and approving it sticks.
+    waiting = teacher(3)
+    waiting.approved = False
+    storage.add_teacher(waiting)
+    assert storage.teacher_by_id("t3").approved is False
+    assert storage.teacher_by_id("t1").approved is True
+    assert storage.set_approved("t3", True) is True
+    assert storage.teacher_by_id("t3").approved is True
+    assert storage.set_approved("t9", True) is False
+    assert storage.delete_teacher("t3") is True
+
     # A new password signs the account out everywhere.
     assert storage.set_password("t1", "new-hash") is True
     assert storage.teacher_by_id("t1").password_hash == "new-hash"

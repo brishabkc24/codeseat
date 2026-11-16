@@ -5,6 +5,7 @@ import {
   type AdminOverview,
   type AdminTeacher,
   ApiError,
+  adminApprove,
   adminBlock,
   adminDeleteTeacher,
   adminEndClass,
@@ -219,7 +220,9 @@ function AdminPage({ onSignedOut }: { onSignedOut: () => void }) {
   };
 
   const classes = data?.classes ?? [];
-  const teachers = data?.teachers ?? [];
+  // Accounts waiting for approval come first: they are the ones that need something done.
+  const teachers = [...(data?.teachers ?? [])].sort((a, b) => Number(a.approved) - Number(b.approved));
+  const waiting = teachers.filter((teacher) => !teacher.approved).length;
   const online = classes.reduce((sum, item) => sum + item.online, 0);
 
   return (
@@ -325,6 +328,13 @@ function AdminPage({ onSignedOut }: { onSignedOut: () => void }) {
                 Passwords are kept scrambled, so nobody can read them, not even here. When a teacher forgets theirs,
                 set a new one and tell them.
               </p>
+              {data.approval && (
+                <p className={waiting > 0 ? "admin__note admin__flag" : "admin__note"}>
+                  {waiting > 0
+                    ? `${plural(waiting, "account")} ${waiting === 1 ? "is" : "are"} waiting for your approval.`
+                    : "A new account cannot make classes until you approve it here."}
+                </p>
+              )}
               {teachers.length === 0 ? (
                 <p className="classes__none">Nobody has made an account.</p>
               ) : (
@@ -336,7 +346,9 @@ function AdminPage({ onSignedOut }: { onSignedOut: () => void }) {
                       <li key={teacher.id} className="course">
                         <div className="course__about">
                           <h3 className="course__title">
-                            {teacher.name} {teacher.blocked && <span className="course__kind admin__blocked">Blocked</span>}
+                            {teacher.name}{" "}
+                            {!teacher.approved && <span className="course__kind admin__flag">Waiting for approval</span>}
+                            {teacher.blocked && <span className="course__kind admin__flag">Blocked</span>}
                           </h3>
                           <p className="course__meta">
                             <span className="mono">{teacher.email}</span> · joined {day(teacher.createdAt)} ·{" "}
@@ -399,6 +411,23 @@ function AdminPage({ onSignedOut }: { onSignedOut: () => void }) {
                           )}
                           {mine === null && (
                             <>
+                              {!teacher.approved && (
+                                <button
+                                  type="button"
+                                  className="btn btn--primary"
+                                  onClick={() =>
+                                    void act(
+                                      `approve:${teacher.id}`,
+                                      () => adminApprove(teacher.id),
+                                      `${teacher.name} is approved and can make classes.`,
+                                    )
+                                  }
+                                  disabled={busy === `approve:${teacher.id}`}
+                                  aria-busy={busy === `approve:${teacher.id}`}
+                                >
+                                  Approve
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 className="btn"

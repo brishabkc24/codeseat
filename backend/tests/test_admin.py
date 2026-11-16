@@ -27,8 +27,10 @@ ADMIN_PASSWORD = "a long admin password"
 
 @pytest.fixture
 def admin(client):  # noqa: F811
-    """The same browser, with the admin signed in."""
+    """The same browser, with the admin signed in. New accounts need no approval here;
+    the approval tests switch that on themselves."""
     main.ADMIN_PASSWORD = ADMIN_PASSWORD
+    main.APPROVAL_OFF = True
     response = client.post("/api/admin/session", json={"password": ADMIN_PASSWORD})
     assert response.status_code == 200, response.text
     return client
@@ -86,11 +88,13 @@ def test_wrong_admin_passwords_are_braked(client):  # noqa: F811
 
 def test_a_teacher_is_not_the_admin(client):  # noqa: F811
     main.ADMIN_PASSWORD = ADMIN_PASSWORD
+    main.APPROVAL_OFF = True
     room = open_class(client)  # signed in as a teacher, not as the admin
     listed = main.store.storage.all_teachers()
     assert client.get("/api/admin/overview").status_code == 401
     assert client.delete(f"/api/admin/classes/{room['code']}").status_code == 401
     assert client.post(f"/api/admin/teachers/{listed[0].id}/block", json={"blocked": True}).status_code == 401
+    assert client.post(f"/api/admin/teachers/{listed[0].id}/approve").status_code == 401
     assert client.post(f"/api/admin/teachers/{listed[0].id}/password", json={"password": "x" * 12}).status_code == 401
     assert client.delete(f"/api/admin/teachers/{listed[0].id}").status_code == 401
     assert main.store.get(room["code"]) is not None
@@ -189,11 +193,50 @@ def test_the_admin_deletes_an_account_and_its_classes(admin):
     with student(admin, room["code"], "Asha") as asha:
         assert admin.delete(f"/api/admin/teachers/{teacher_id}").status_code == 204
         assert closed_with(asha) == main.CLOSE_NO_CLASS
-    assert overview(admin) == {"teachers": [], "classes": []}
+    assert overview(admin) == {"approval": False, "teachers": [], "classes": []}
     assert admin.get(f"/api/classes/{other['code']}").status_code == 404
     assert admin.get("/api/session").json()["teacher"] is None
     assert admin.delete(f"/api/admin/teachers/{teacher_id}").status_code == 404
     sign_up(admin)  # the email is free again
+
+
+# ---------------------------------------------------------------- approval
+
+
+def test_a_new_account_waits_for_the_admin_before_it_can_make_classes(admin):
+    main.APPROVAL_OFF = False
+    waiting = sign_up(admin)
+    assert waiting["approved"] is False
+    assert admin.get("/api/session").json()["teacher"]["approved"] is False  # logged in, and told to wait
+    refused = admin.post("/api/classes", json={"title": "Too soon", "rows": 1, "cols": 1})
+    assert refused.status_code == 403
+    assert "waiting for the site's admin" in refused.json()["detail"]
+    assert admin.get("/api/classes").json() == {"classes": []}
+
+    data = overview(admin)
+    assert data["approval"] is True
+    assert data["teachers"][0]["approved"] is False
+    assert admin.post(f"/api/admin/teachers/{waiting['id']}/approve").status_code == 204
+    assert overview(admin)["teachers"][0]["approved"] is True
+    assert admin.get("/api/session").json()["teacher"]["approved"] is True  # no new login needed
+    open_class(admin)
+    assert admin.post("/api/admin/teachers/nobody/approve").status_code == 404
+
+
+def test_approval_is_not_asked_for_where_nobody_could_give_it(client):  # noqa: F811
+    assert sign_up(client)["approved"] is True  # a site with no admin
+    open_class(client)
+
+    main.ADMIN_PASSWORD = ADMIN_PASSWORD
+    main.APPROVAL_OFF = True  # an admin who has switched approval off
+    client.cookies.clear()
+    assert sign_up(client, email="second@example.com")["approved"] is True
+
+    main.APPROVAL_OFF = False
+    client.cookies.clear()
+    assert sign_up(client, email="third@example.com")["approved"] is False
+    # Accounts made earlier keep what they had.
+    assert main.store.storage.teacher_by_email(TEACHER["email"]).approved is True
 
 
 # ---------------------------------------------------------------- limits
@@ -308,6 +351,7 @@ def test_a_database_from_before_blocking_gains_the_column(tmp_path):
 
     storage = SqliteStorage(path)
     assert storage.teacher_by_id("t1").blocked is False
+    assert storage.teacher_by_id("t1").approved is True  # accounts from before approval are not locked out
     assert storage.set_blocked("t1", True)
     storage.close()
     assert SqliteStorage(path).teacher_by_id("t1").blocked is True  # opening it again changes nothing

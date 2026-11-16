@@ -2,7 +2,7 @@ import { type FormEvent, useCallback, useEffect, useRef, useState } from "react"
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { SeatMap } from "../components/SeatMap";
 import { TopBar } from "../components/TopBar";
-import { createClass, deleteClass, errorText, listClasses } from "../lib/api";
+import { createClass, deleteClass, errorText, listClasses, whoAmI } from "../lib/api";
 import type { ClassSummary, Language, Teacher } from "../lib/protocol";
 import { useSession } from "../lib/session";
 
@@ -25,15 +25,33 @@ export function Classes() {
     );
   }
   if (!session.teacher) return <Navigate to="/" replace state={{ notice: "Log in to see your classes." }} />;
-  return <ClassesPage teacher={session.teacher} signOut={session.signOut} />;
+  return <ClassesPage teacher={session.teacher} signedIn={session.signedIn} signOut={session.signOut} />;
 }
+
+const APPROVAL_CHECK_MS = 15_000;
 
 function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
 
-function ClassesPage({ teacher, signOut }: { teacher: Teacher; signOut: () => Promise<void> }) {
+type PageProps = { teacher: Teacher; signedIn: (teacher: Teacher) => void; signOut: () => Promise<void> };
+
+function ClassesPage({ teacher, signedIn, signOut }: PageProps) {
   const navigate = useNavigate();
+
+  // A new account waits for the site's admin. Ask now and then, so the form appears by itself.
+  const waiting = !teacher.approved;
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      whoAmI().then(
+        (found) => found?.approved && signedIn(found),
+        () => undefined, // the next try will do
+      );
+    }, APPROVAL_CHECK_MS);
+    return () => window.clearInterval(timer);
+  }, [waiting, signedIn]);
 
   const [classes, setClasses] = useState<ClassSummary[] | null>(null);
   const [listError, setListError] = useState("");
@@ -112,104 +130,114 @@ function ClassesPage({ teacher, signOut }: { teacher: Teacher; signOut: () => Pr
           <p className="lead">A class keeps its join code, its lesson and every seat between lessons.</p>
         </div>
 
-        <section className="classes__section" aria-labelledby="new-class-title">
-          <h2 id="new-class-title">New class</h2>
-          <form className="classes__form" onSubmit={start} noValidate>
-            <div className="home__setup">
-              <div className="home__fields">
-                <div className="field">
-                  <label className="field__label" htmlFor="start-title">
-                    Class name
-                  </label>
-                  <input
-                    id="start-title"
-                    ref={titleRef}
-                    className="input"
-                    name="title"
-                    value={title}
-                    onChange={(event) => setTitle(event.target.value)}
-                    maxLength={60}
-                    autoComplete="off"
-                    aria-required="true"
-                    aria-invalid={startError !== ""}
-                    aria-describedby="start-title-help"
-                  />
-                  <p
-                    id="start-title-help"
-                    className={startError ? "field__help field__help--error" : "field__help"}
-                    role={startError ? "alert" : undefined}
-                  >
-                    {startError || "Students see this at the top of the class."}
-                  </p>
-                </div>
-                <div className="field">
-                  <label className="field__label" htmlFor="start-language">
-                    The class writes
-                  </label>
-                  <select
-                    id="start-language"
-                    className="input"
-                    name="language"
-                    value={language}
-                    onChange={(event) => setLanguage(event.target.value as Language)}
-                  >
-                    <option value="python">Python</option>
-                    <option value="web">Web pages (HTML, CSS, JavaScript)</option>
-                  </select>
-                  <p className="field__help">This cannot be changed once the class is made.</p>
-                </div>
-                <div className="home__sizes">
+        {waiting ? (
+          <section className="classes__section" aria-labelledby="waiting-title">
+            <h2 id="waiting-title">Waiting for approval</h2>
+            <p className="classes__waiting" role="status">
+              Your account is made. The person who runs this site looks at each new account before it can
+              make classes. This page changes by itself once yours is approved.
+            </p>
+          </section>
+        ) : (
+          <section className="classes__section" aria-labelledby="new-class-title">
+            <h2 id="new-class-title">New class</h2>
+            <form className="classes__form" onSubmit={start} noValidate>
+              <div className="home__setup">
+                <div className="home__fields">
                   <div className="field">
-                    <label className="field__label" htmlFor="start-rows">
-                      Rows
+                    <label className="field__label" htmlFor="start-title">
+                      Class name
                     </label>
-                    <select
-                      id="start-rows"
+                    <input
+                      id="start-title"
+                      ref={titleRef}
                       className="input"
-                      name="rows"
-                      value={rows}
-                      onChange={(event) => setRows(Number(event.target.value))}
+                      name="title"
+                      value={title}
+                      onChange={(event) => setTitle(event.target.value)}
+                      maxLength={60}
+                      autoComplete="off"
+                      aria-required="true"
+                      aria-invalid={startError !== ""}
+                      aria-describedby="start-title-help"
+                    />
+                    <p
+                      id="start-title-help"
+                      className={startError ? "field__help field__help--error" : "field__help"}
+                      role={startError ? "alert" : undefined}
                     >
-                      {ROW_CHOICES.map((choice) => (
-                        <option key={choice} value={choice}>
-                          {choice}
-                        </option>
-                      ))}
-                    </select>
+                      {startError || "Students see this at the top of the class."}
+                    </p>
                   </div>
                   <div className="field">
-                    <label className="field__label" htmlFor="start-cols">
-                      Seats per row
+                    <label className="field__label" htmlFor="start-language">
+                      The class writes
                     </label>
                     <select
-                      id="start-cols"
+                      id="start-language"
                       className="input"
-                      name="cols"
-                      value={cols}
-                      onChange={(event) => setCols(Number(event.target.value))}
+                      name="language"
+                      value={language}
+                      onChange={(event) => setLanguage(event.target.value as Language)}
                     >
-                      {COL_CHOICES.map((choice) => (
-                        <option key={choice} value={choice}>
-                          {choice}
-                        </option>
-                      ))}
+                      <option value="python">Python</option>
+                      <option value="web">Web pages (HTML, CSS, JavaScript)</option>
                     </select>
+                    <p className="field__help">This cannot be changed once the class is made.</p>
                   </div>
+                  <div className="home__sizes">
+                    <div className="field">
+                      <label className="field__label" htmlFor="start-rows">
+                        Rows
+                      </label>
+                      <select
+                        id="start-rows"
+                        className="input"
+                        name="rows"
+                        value={rows}
+                        onChange={(event) => setRows(Number(event.target.value))}
+                      >
+                        {ROW_CHOICES.map((choice) => (
+                          <option key={choice} value={choice}>
+                            {choice}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label className="field__label" htmlFor="start-cols">
+                        Seats per row
+                      </label>
+                      <select
+                        id="start-cols"
+                        className="input"
+                        name="cols"
+                        value={cols}
+                        onChange={(event) => setCols(Number(event.target.value))}
+                      >
+                        {COL_CHOICES.map((choice) => (
+                          <option key={choice} value={choice}>
+                            {choice}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <button type="submit" className="btn btn--primary" disabled={starting} aria-busy={starting}>
+                    {starting ? "Creating…" : "Create class"}
+                  </button>
                 </div>
-                <button type="submit" className="btn btn--primary" disabled={starting} aria-busy={starting}>
-                  {starting ? "Creating…" : "Create class"}
-                </button>
-              </div>
 
-              <figure className="home__preview">
-                <SeatMap rows={rows} cols={cols} seats={[]} mode="preview" compact />
-                <figcaption>
-                  <span className="mono">{rows * cols}</span> seats, row A nearest the teacher
-                </figcaption>
-              </figure>
-            </div>
-          </form>
-        </section>
+                <figure className="home__preview">
+                  <SeatMap rows={rows} cols={cols} seats={[]} mode="preview" compact />
+                  <figcaption>
+                    <span className="mono">{rows * cols}</span> seats, row A nearest the teacher
+                  </figcaption>
+                </figure>
+              </div>
+            </form>
+          </section>
+        )}
 
         <section className="classes__section" aria-labelledby="class-list-title">
           <h2 id="class-list-title">Saved classes</h2>

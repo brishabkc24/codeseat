@@ -37,6 +37,7 @@ def client():
     main.signups_in_all = Throttle(main.SIGNUPS_IN_ALL, 3600)
     main.classes_by_one_teacher = Throttle(main.NEW_CLASSES_PER_TEACHER, 3600)
     main.ADMIN_PASSWORD = ""
+    main.APPROVAL_OFF = False
     main.presence_sent = {}
     main.seat_news = {}
     with TestClient(main.app) as test_client:

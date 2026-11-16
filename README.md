@@ -81,6 +81,10 @@ The person who runs the site has an admin page at `/admin`:
 - A class can be ended, which sends everyone out and deletes it. An account can be
   blocked (its logins end at once and new ones are refused; its classes stay),
   given a new password, or deleted with all its classes
+- A new account waits for the admin's approval. Until then its teacher can log in
+  but cannot make a class; their page says so and changes by itself once the
+  admin presses Approve. Accounts made before this existed, or on a site with
+  no admin, need no approval. `CODESEAT_APPROVAL=off` lets everyone straight in
 - Passwords cannot be shown: only a one-way hash of each is stored. Setting a new
   one is the way to help a teacher who has forgotten theirs
 - The page is off until `CODESEAT_ADMIN_PASSWORD` is set to 12 characters or more
@@ -202,7 +206,8 @@ Things to know about that setup:
 
 - To switch on the admin page, add `CODESEAT_ADMIN_PASSWORD` in the service's
   Environment settings: a long password of your own, 12 characters or more.
-  Changing it signs the admin out everywhere.
+  Changing it signs the admin out everywhere. From then on each new teacher
+  account waits on that page for your approval before it can make classes.
 
 - A free Render service sleeps after 15 minutes without visitors and takes about a
   minute to wake. Open the site before the lesson starts. A class in progress keeps
