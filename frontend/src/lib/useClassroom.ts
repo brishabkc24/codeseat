@@ -9,6 +9,7 @@ const FATAL: Record<number, CloseReason> = {
   4401: "not-teacher",
   4404: "no-class",
   4409: "replaced",
+  4429: "refused", // far too many messages at once; the reason says so
 };
 
 export type Classroom = {

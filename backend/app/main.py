@@ -15,6 +15,7 @@ Messages the server sends:  welcome, seats, you, teacher_source, student_source,
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import os
@@ -28,10 +29,15 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocke
 from pydantic import BaseModel
 
 from .accounts import (
+    ADMIN_SESSION_SECONDS,
     MAX_TEACHER_NAME,
+    MIN_ADMIN_PASSWORD,
     SESSION_SECONDS,
     AccountError,
     LoginBrake,
+    Throttle,
+    admin_token,
+    admin_token_valid,
     check_password,
     clean_email,
     clean_password,
@@ -48,6 +54,9 @@ SAVE_EVERY_SECONDS = 2
 PRESENCE_EVERY_SECONDS = 20  # how often teachers are told who has gone idle
 SEAT_NEWS_SECONDS = 0.1  # seat changes within this long reach students as one list
 SESSION_COOKIE = "codeseat_session"
+ADMIN_COOKIE = "codeseat_admin"
+MESSAGE_WINDOW_SECONDS = 10
+MESSAGES_PER_WINDOW = 150  # typing sends five a second at most; far more than that is a script
 DEFAULT_DATABASE = Path(__file__).resolve().parent.parent / "data" / "codeseat.db"
 DEFAULT_SITE = Path(__file__).resolve().parent.parent / "static"
 
@@ -56,6 +65,7 @@ CLOSE_BAD_HELLO = 4400
 CLOSE_NOT_TEACHER = 4401
 CLOSE_NO_CLASS = 4404
 CLOSE_REPLACED = 4409
+CLOSE_TOO_FAST = 4429
 
 log = logging.getLogger("codeseat")
 
@@ -171,6 +181,16 @@ app = FastAPI(title="CodeSeat", lifespan=lifespan)
 store = ClassroomStore(open_storage(os.environ.get("DATABASE_URL") or os.environ.get("CODESEAT_DATABASE", DEFAULT_DATABASE)))
 hub = Hub()
 brake = LoginBrake()
+admin_brake = LoginBrake()
+# Limits on what one visitor or one account may do in an hour. They are what stops a
+# script from filling the site with accounts and classes.
+SIGNUPS_PER_ADDRESS = 5
+SIGNUPS_IN_ALL = 60
+NEW_CLASSES_PER_TEACHER = 10
+signups_from_one_address = Throttle(SIGNUPS_PER_ADDRESS, 3600)
+signups_in_all = Throttle(SIGNUPS_IN_ALL, 3600)
+classes_by_one_teacher = Throttle(NEW_CLASSES_PER_TEACHER, 3600)
+ADMIN_PASSWORD = os.environ.get("CODESEAT_ADMIN_PASSWORD", "")
 presence_sent: dict[str, tuple] = {}  # per class, the idle marks teachers were last told about
 seat_news: dict[str, asyncio.Task] = {}  # per class, the bundled seat list on its way to students
 
@@ -230,6 +250,9 @@ def sign_up(body: SignUp, request: Request, response: Response) -> dict:
         password = clean_password(body.password)
     except (RoomError, AccountError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+    address = request.client.host if request.client else "unknown"
+    if not signups_from_one_address.allow(address) or not signups_in_all.allow("everyone"):
+        raise HTTPException(status_code=429, detail="Too many new accounts just now. Try again in an hour.")
     teacher = TeacherRecord(
         id=secrets.token_urlsafe(12),
         name=name,
@@ -266,6 +289,8 @@ def log_in(body: LogIn, request: Request, response: Response) -> dict:
         brake.failed(email)
         raise HTTPException(status_code=401, detail="Wrong email or password.")
     brake.succeeded(email)
+    if teacher.blocked:
+        raise HTTPException(status_code=403, detail="This account has been blocked. Write to the site's admin.")
     start_session(teacher, request, response)
     return {"teacher": public(teacher)}
 
@@ -307,6 +332,8 @@ def my_classes(teacher: TeacherRecord = Depends(require_teacher)) -> dict:
 
 @app.post("/api/classes", status_code=201)
 def create_class(body: NewClass, teacher: TeacherRecord = Depends(require_teacher)) -> dict:
+    if not classes_by_one_teacher.allow(teacher.id):
+        raise HTTPException(status_code=429, detail="That is a lot of new classes. Try again in an hour.")
     try:
         room = store.create(teacher.id, body.title, body.rows, body.cols, body.language)
     except RoomError as error:
@@ -329,9 +356,141 @@ async def delete_class(code: str, teacher: TeacherRecord = Depends(require_teach
         raise HTTPException(status_code=404, detail="No class has that code.")
     if room.teacher_id != teacher.id:
         raise HTTPException(status_code=403, detail="This class belongs to another teacher.")
-    store.delete(room.code)
-    for conn in hub.everyone(room.code):
-        await close_quietly(conn.ws, CLOSE_NO_CLASS, "The teacher has deleted this class.")
+    await end_class(room.code, "The teacher has deleted this class.")
+
+
+# ---------------------------------------------------------------- the site's admin
+
+# The admin is whoever knows CODESEAT_ADMIN_PASSWORD, set where the site is hosted.
+# Teachers' passwords are kept only as one-way hashes, so nobody, the admin
+# included, can read them; the admin can give an account a new one instead.
+
+
+class AdminLogIn(BaseModel):
+    password: str
+
+
+class Block(BaseModel):
+    blocked: bool
+
+
+class NewPassword(BaseModel):
+    password: str
+
+
+def admin_configured() -> bool:
+    return len(ADMIN_PASSWORD) >= MIN_ADMIN_PASSWORD
+
+
+def is_admin(request: Request) -> bool:
+    return admin_configured() and admin_token_valid(request.cookies.get(ADMIN_COOKIE), ADMIN_PASSWORD)
+
+
+def require_admin(request: Request) -> None:
+    if not is_admin(request):
+        raise HTTPException(status_code=401, detail="Log in as the admin to do this.")
+
+
+@app.get("/api/admin/session")
+def admin_session(request: Request) -> dict:
+    return {"configured": admin_configured(), "admin": is_admin(request)}
+
+
+@app.post("/api/admin/session")
+def admin_log_in(body: AdminLogIn, request: Request, response: Response) -> dict:
+    if not admin_configured():
+        raise HTTPException(status_code=404, detail="The admin page is not switched on for this site.")
+    wait = admin_brake.wait("admin")
+    if wait:
+        minutes = max(1, -(-wait // 60))
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many wrong passwords. Try again in {minutes} minute{'s' if minutes > 1 else ''}.",
+        )
+    if not hmac.compare_digest(body.password.encode(), ADMIN_PASSWORD.encode()):
+        admin_brake.failed("admin")
+        raise HTTPException(status_code=401, detail="Wrong password.")
+    admin_brake.succeeded("admin")
+    response.set_cookie(
+        ADMIN_COOKIE,
+        admin_token(ADMIN_PASSWORD),
+        max_age=ADMIN_SESSION_SECONDS,
+        path="/",
+        httponly=True,
+        samesite="strict",
+        secure=request.url.scheme == "https",
+    )
+    return {"configured": True, "admin": True}
+
+
+@app.delete("/api/admin/session", status_code=204)
+def admin_log_out(response: Response) -> None:
+    response.delete_cookie(ADMIN_COOKIE, path="/")
+
+
+@app.get("/api/admin/overview", dependencies=[Depends(require_admin)])
+def admin_overview() -> dict:
+    teachers = store.storage.all_teachers()
+    names = {teacher.id: teacher.name for teacher in teachers}
+    classes = store.all_summaries()
+    owned: dict[str, int] = {}
+    for item in classes:
+        owned[item["teacherId"]] = owned.get(item["teacherId"], 0) + 1
+        item["teacherName"] = names.get(item["teacherId"], "")
+        item["online"] = len(hub.students(item["code"]))  # students connected at this moment
+        item["teacherHere"] = bool(hub.teachers(item["code"]))
+    return {
+        "teachers": [
+            {**public(teacher), "createdAt": teacher.created_at, "blocked": teacher.blocked, "classes": owned.get(teacher.id, 0)}
+            for teacher in teachers
+        ],
+        "classes": classes,
+    }
+
+
+async def end_class(code: str, reason: str) -> None:
+    """Deletes a class and closes every socket in it."""
+    store.delete(code)
+    for conn in hub.everyone(code):
+        await close_quietly(conn.ws, CLOSE_NO_CLASS, reason)
+
+
+@app.delete("/api/admin/classes/{code}", status_code=204, dependencies=[Depends(require_admin)])
+async def admin_end_class(code: str) -> None:
+    room = store.get(code)
+    if room is None:
+        raise HTTPException(status_code=404, detail="No class has that code.")
+    await end_class(room.code, "This class has been ended.")
+
+
+@app.post("/api/admin/teachers/{teacher_id}/block", dependencies=[Depends(require_admin)])
+async def admin_block(teacher_id: str, body: Block) -> dict:
+    if not store.storage.set_blocked(teacher_id, body.blocked):
+        raise HTTPException(status_code=404, detail="There is no such account.")
+    if body.blocked:  # an open desk closes at once; the students' work stays
+        for record in store.storage.classes_for_teacher(teacher_id):
+            for conn in hub.teachers(record.code):
+                await close_quietly(conn.ws, CLOSE_NOT_TEACHER, "This account has been blocked.")
+    return {"blocked": body.blocked}
+
+
+@app.post("/api/admin/teachers/{teacher_id}/password", status_code=204, dependencies=[Depends(require_admin)])
+def admin_set_password(teacher_id: str, body: NewPassword) -> None:
+    try:
+        password = clean_password(body.password)
+    except AccountError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if not store.storage.set_password(teacher_id, hash_password(password)):
+        raise HTTPException(status_code=404, detail="There is no such account.")
+
+
+@app.delete("/api/admin/teachers/{teacher_id}", status_code=204, dependencies=[Depends(require_admin)])
+async def admin_delete_teacher(teacher_id: str) -> None:
+    if store.storage.teacher_by_id(teacher_id) is None:
+        raise HTTPException(status_code=404, detail="There is no such account.")
+    for record in store.storage.classes_for_teacher(teacher_id):
+        await end_class(record.code, "This class has been ended.")
+    store.storage.delete_teacher(teacher_id)
 
 
 # ---------------------------------------------------------------- WebSocket
@@ -605,9 +764,17 @@ async def classroom_socket(ws: WebSocket, code: str) -> None:
     if not conn.is_teacher:
         await broadcast_seats(room)
 
+    window_started, in_window = time.monotonic(), 0
     try:
         while True:
             message = await receive(ws)
+            # A person cannot send this much; a script can, and would slow the class for everyone.
+            in_window += 1
+            if time.monotonic() - window_started > MESSAGE_WINDOW_SECONDS:
+                window_started, in_window = time.monotonic(), 1
+            elif in_window > MESSAGES_PER_WINDOW:
+                await close_quietly(ws, CLOSE_TOO_FAST, "Too many messages at once.")
+                break
             if message is None:
                 continue
             room.touch()

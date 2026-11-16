@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS teachers (
     name TEXT NOT NULL,
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    created_at DOUBLE PRECISION NOT NULL
+    created_at DOUBLE PRECISION NOT NULL,
+    blocked INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,
@@ -59,6 +60,7 @@ class TeacherRecord:
     email: str
     password_hash: str
     created_at: float
+    blocked: bool = False  # set by the site's admin: cannot log in or open a desk
 
 
 @dataclass
@@ -82,6 +84,7 @@ def _teacher(row: Mapping | None) -> TeacherRecord | None:
         email=row["email"],
         password_hash=row["password_hash"],
         created_at=row["created_at"],
+        blocked=bool(row["blocked"]),
     )
 
 
@@ -119,6 +122,10 @@ class Storage:
     def _is_duplicate(self, error: Exception) -> bool:
         raise NotImplementedError
 
+    def _ensure_column(self, table: str, name: str, definition: str) -> None:
+        """Adds a column to a table made before the column existed. Called with the lock held."""
+        raise NotImplementedError
+
     def close(self) -> None:
         raise NotImplementedError
 
@@ -128,6 +135,7 @@ class Storage:
         with self._lock:
             for statement in SCHEMA.split(";"):
                 self._run(statement)
+            self._ensure_column("teachers", "blocked", "INTEGER NOT NULL DEFAULT 0")
 
     def _one(self, sql: str, values: tuple = ()) -> Mapping | None:
         with self._lock:
@@ -161,6 +169,30 @@ class Storage:
     def teacher_by_id(self, teacher_id: str) -> TeacherRecord | None:
         return _teacher(self._one("SELECT * FROM teachers WHERE id = ?", (teacher_id,)))
 
+    def all_teachers(self) -> list[TeacherRecord]:
+        rows = self._all("SELECT * FROM teachers ORDER BY created_at DESC")
+        return [record for record in map(_teacher, rows) if record is not None]
+
+    def set_blocked(self, teacher_id: str, blocked: bool) -> bool:
+        """Blocks or unblocks an account. A blocked teacher's logins end at once."""
+        changed = self._change("UPDATE teachers SET blocked = ? WHERE id = ?", (1 if blocked else 0, teacher_id)) > 0
+        if changed and blocked:
+            self.delete_sessions_for(teacher_id)
+        return changed
+
+    def set_password(self, teacher_id: str, password_hash: str) -> bool:
+        """Replaces the password and ends every login made with the old one."""
+        changed = self._change("UPDATE teachers SET password_hash = ? WHERE id = ?", (password_hash, teacher_id)) > 0
+        if changed:
+            self.delete_sessions_for(teacher_id)
+        return changed
+
+    def delete_teacher(self, teacher_id: str) -> bool:
+        """Removes the account with its logins and its classes."""
+        self._change("DELETE FROM sessions WHERE teacher_id = ?", (teacher_id,))
+        self._change("DELETE FROM classes WHERE teacher_id = ?", (teacher_id,))
+        return self._change("DELETE FROM teachers WHERE id = ?", (teacher_id,)) > 0
+
     # ---------------------------------------------------------------- sessions
 
     def add_session(self, token_hash: str, teacher_id: str, created_at: float, expires_at: float) -> None:
@@ -173,13 +205,16 @@ class Storage:
         return _teacher(
             self._one(
                 "SELECT teachers.* FROM sessions JOIN teachers ON teachers.id = sessions.teacher_id"
-                " WHERE sessions.token_hash = ? AND sessions.expires_at > ?",
+                " WHERE sessions.token_hash = ? AND sessions.expires_at > ? AND teachers.blocked = 0",
                 (token_hash, now),
             )
         )
 
     def delete_session(self, token_hash: str) -> None:
         self._change("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+
+    def delete_sessions_for(self, teacher_id: str) -> None:
+        self._change("DELETE FROM sessions WHERE teacher_id = ?", (teacher_id,))
 
     def delete_expired_sessions(self, now: float) -> None:
         self._change("DELETE FROM sessions WHERE expires_at <= ?", (now,))
@@ -211,6 +246,14 @@ class Storage:
         rows = self._all("SELECT * FROM classes WHERE teacher_id = ? ORDER BY created_at DESC", (teacher_id,))
         return [record for record in map(_class, rows) if record is not None]
 
+    def all_classes(self) -> list[ClassRecord]:
+        rows = self._all("SELECT * FROM classes ORDER BY updated_at DESC")
+        return [record for record in map(_class, rows) if record is not None]
+
+    def count_classes(self, teacher_id: str) -> int:
+        row = self._one("SELECT COUNT(*) AS total FROM classes WHERE teacher_id = ?", (teacher_id,))
+        return int(row["total"]) if row is not None else 0
+
     def class_exists(self, code: str) -> bool:
         return self._one("SELECT 1 AS found FROM classes WHERE code = ?", (code,)) is not None
 
@@ -240,6 +283,11 @@ class SqliteStorage(Storage):
 
     def _is_duplicate(self, error: Exception) -> bool:
         return isinstance(error, sqlite3.IntegrityError)
+
+    def _ensure_column(self, table: str, name: str, definition: str) -> None:
+        have = {row["name"] for row in self._db.execute(f"PRAGMA table_info({table})").fetchall()}
+        if name not in have:
+            self._db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
     def close(self) -> None:
         with self._lock:
@@ -297,6 +345,9 @@ class PostgresStorage(Storage):
 
     def _is_duplicate(self, error: Exception) -> bool:
         return isinstance(error, self._psycopg.errors.UniqueViolation)
+
+    def _ensure_column(self, table: str, name: str, definition: str) -> None:
+        self._run(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {definition}")
 
     def close(self) -> None:
         with self._lock:

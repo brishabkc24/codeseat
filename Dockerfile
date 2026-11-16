@@ -26,4 +26,4 @@ COPY --from=site /site/dist ./static
 # so the proxy's headers are trusted: that is how the server knows the page is
 # on https and marks the session cookie Secure.
 EXPOSE 10000
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000} --proxy-headers --forwarded-allow-ips='*'"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000} --proxy-headers --forwarded-allow-ips='*' --ws-max-size 1048576"]

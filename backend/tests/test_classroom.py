@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app import main
-from app.accounts import LOGIN_ATTEMPTS, LOGIN_WINDOW_SECONDS, LoginBrake, check_password, hash_password
+from app.accounts import LOGIN_ATTEMPTS, LOGIN_WINDOW_SECONDS, LoginBrake, Throttle, check_password, hash_password
 from app.rooms import (
     IDLE_SECONDS,
     MAX_HINT,
@@ -32,6 +32,11 @@ def client():
     main.store = ClassroomStore(Storage(":memory:"))
     main.hub = main.Hub()
     main.brake = LoginBrake()
+    main.admin_brake = LoginBrake()
+    main.signups_from_one_address = Throttle(main.SIGNUPS_PER_ADDRESS, 3600)
+    main.signups_in_all = Throttle(main.SIGNUPS_IN_ALL, 3600)
+    main.classes_by_one_teacher = Throttle(main.NEW_CLASSES_PER_TEACHER, 3600)
+    main.ADMIN_PASSWORD = ""
     main.presence_sent = {}
     main.seat_news = {}
     with TestClient(main.app) as test_client:
@@ -730,9 +735,12 @@ def test_idle_is_only_for_students_who_are_seated_and_online():
 
 def test_hand_tickets_carry_on_after_a_reload():
     room = bare_store().create("t1", "Intro", 1, 3)
-    asha, bikram, chandra = (room.join(None, name) for name in ("Asha", "Bikram", "Chandra"))
-    for seat, person in enumerate((asha, bikram, chandra)):
+    people = []
+    for seat, name in enumerate(("Asha", "Bikram", "Chandra")):
+        person = room.join(None, name)
         room.take_seat(person, seat)
+        people.append(person)
+    asha, bikram, chandra = people
     room.set_hand(asha, True)
     room.set_hand(bikram, True)
     room.set_hand(asha, False)

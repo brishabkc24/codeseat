@@ -73,6 +73,26 @@ The teacher also sees who needs help:
   editor until they put it away or the teacher takes it back
 - Only the teacher sees any of this; classmates see who sits where and nothing more
 
+The person who runs the site has an admin page at `/admin`:
+
+- It lists every class (whose it is, how many students are in it right now, whether
+  the teacher is at the desk) and every teacher account (name, email, when it was
+  made, how many classes it has)
+- A class can be ended, which sends everyone out and deletes it. An account can be
+  blocked (its logins end at once and new ones are refused; its classes stay),
+  given a new password, or deleted with all its classes
+- Passwords cannot be shown: only a one-way hash of each is stored. Setting a new
+  one is the way to help a teacher who has forgotten theirs
+- The page is off until `CODESEAT_ADMIN_PASSWORD` is set to 12 characters or more
+
+Limits keep a script from flooding the site:
+
+- One address can make 5 accounts an hour, and the whole site 60
+- An account can make 10 classes an hour and keep 20
+- A class takes its seats plus 10 people at once, and forgets visitors who left
+  without taking a seat or writing anything
+- A connection that sends more than 150 messages in 10 seconds is closed
+
 CodeSeat is also an installable web app: browsers that allow it show an "Install app"
 button in the top bar, and the installed app opens to its own screen, with its icon
 on the home screen or taskbar.
@@ -179,6 +199,10 @@ the Dockerfile. With a free Postgres database from [Neon](https://neon.com):
    connection string as `DATABASE_URL` when asked.
 
 Things to know about that setup:
+
+- To switch on the admin page, add `CODESEAT_ADMIN_PASSWORD` in the service's
+  Environment settings: a long password of your own, 12 characters or more.
+  Changing it signs the admin out everywhere.
 
 - A free Render service sleeps after 15 minutes without visitors and takes about a
   minute to wake. Open the site before the lesson starts. A class in progress keeps

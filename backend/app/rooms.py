@@ -34,6 +34,8 @@ IDLE_SECONDS = 2 * 60 * 60  # a classroom nobody has touched for this long leave
 STUDENT_IDLE_SECONDS = 3 * 60  # a seated student who has not typed or run anything for this long shows as idle
 STUCK_AFTER = 3  # failed tries in a row (crashes, or checks that did not pass) before a seat shows as stuck
 RUN_STATES = ("ok", "error")
+MAX_CLASSES_PER_TEACHER = 20  # one account cannot fill the database with classes
+SPARE_PLACES = 10  # how many more people than seats may be in a class at once
 # What a class writes: Python programs, or web pages (HTML with its CSS and JavaScript).
 LANGUAGES = ("python", "web")
 
@@ -192,6 +194,7 @@ class Classroom:
         clean = clean_text(name, MAX_NAME, "Your name")
         student = self.students.get(student_id) if isinstance(student_id, str) else None
         if student is None:
+            self._make_room()
             student = Student(id=secrets.token_urlsafe(16), name=clean)
             self.students[student.id] = student
             self.dirty = True
@@ -201,6 +204,25 @@ class Classroom:
                 student.name = clean
                 self.dirty = True
         return student
+
+    def _make_room(self) -> None:
+        """Before a newcomer is let in: forget visitors who left nothing, and refuse a crowd.
+
+        Without this, a script joining again and again under new names would fill the
+        class, its memory and its saved copy without end.
+        """
+        strangers = [
+            student.id
+            for student in self.students.values()
+            if not student.online and student.seat is None and not student.source and not student.passed
+        ]
+        for student_id in strangers:
+            del self.students[student_id]
+        if strangers:
+            self.dirty = True
+        here = sum(1 for student in self.students.values() if student.online)
+        if here >= self.seat_count + SPARE_PLACES or len(self.students) >= 4 * self.seat_count + 40:
+            raise RoomError("This class is full. Ask your teacher.")
 
     def active(self, student: Student) -> bool:
         """Notes that the student just did something. True if they had been idle until now."""
@@ -503,6 +525,10 @@ class ClassroomStore:
             raise RoomError(f"A classroom can have up to {MAX_ROWS} rows and {MAX_COLS} seats per row.")
         if language not in LANGUAGES:
             raise RoomError("A class is for Python or for web pages.")
+        if self.storage.count_classes(teacher_id) >= MAX_CLASSES_PER_TEACHER:
+            raise RoomError(
+                f"You have {MAX_CLASSES_PER_TEACHER} classes, which is the most one account can keep. Delete one to make another."
+            )
         room = Classroom(
             code=self._new_code(), title=clean, rows=rows, cols=cols, teacher_id=teacher_id, language=language
         )
@@ -534,8 +560,15 @@ class ClassroomStore:
 
     def summaries_for(self, teacher_id: str) -> list[dict]:
         """The teacher's classes, newest first, with live counts for the ones in memory."""
+        return self._summaries(self.storage.classes_for_teacher(teacher_id))
+
+    def all_summaries(self) -> list[dict]:
+        """Every class on the site, most recently changed first, for the admin."""
+        return self._summaries(self.storage.all_classes(), with_teacher=True)
+
+    def _summaries(self, records: list[ClassRecord], with_teacher: bool = False) -> list[dict]:
         summaries = []
-        for record in self.storage.classes_for_teacher(teacher_id):
+        for record in records:
             live = self._rooms.get(record.code)
             if live is not None:
                 students, steps = len(live.students), len(live.steps)
@@ -553,6 +586,7 @@ class ClassroomStore:
                     "steps": steps,
                     "createdAt": record.created_at,
                     "updatedAt": record.updated_at,
+                    **({"teacherId": record.teacher_id} if with_teacher else {}),
                 }
             )
         return summaries

@@ -127,3 +127,59 @@ class LoginBrake:
 
     def succeeded(self, email: str) -> None:
         self._failures.pop(email, None)
+
+
+# ---------------------------------------------------------------- the site's admin
+
+ADMIN_SESSION_SECONDS = 12 * 60 * 60
+MIN_ADMIN_PASSWORD = 12  # a shorter admin password switches the admin page off rather than leave it weak
+
+
+def _admin_key(password: str) -> bytes:
+    return hashlib.sha256(b"codeseat-admin:" + password.encode()).digest()
+
+
+def _admin_mark(password: str, expires: int) -> str:
+    return hmac.new(_admin_key(password), str(expires).encode(), hashlib.sha256).hexdigest()
+
+
+def admin_token(password: str, now: float | None = None) -> str:
+    """A signed pass for the admin's browser. Nothing is stored: the pass carries its own
+    expiry, signed with a key made from the admin password, so changing the password ends it."""
+    expires = int((time.time() if now is None else now) + ADMIN_SESSION_SECONDS)
+    return f"{expires}.{_admin_mark(password, expires)}"
+
+
+def admin_token_valid(token: object, password: str, now: float | None = None) -> bool:
+    if not isinstance(token, str) or not password:
+        return False
+    try:
+        expires_text, mark = token.split(".")
+        expires = int(expires_text)
+    except ValueError:
+        return False
+    if expires <= (time.time() if now is None else now):
+        return False
+    return hmac.compare_digest(mark, _admin_mark(password, expires))
+
+
+class Throttle:
+    """Allows at most `limit` things per key in any stretch of `window` seconds."""
+
+    def __init__(self, limit: int, window: float) -> None:
+        self.limit = limit
+        self.window = window
+        self._times: dict[str, list[float]] = {}
+
+    def allow(self, key: str, now: float | None = None) -> bool:
+        """True, and the thing is counted, if the key still has room. False if it has had its share."""
+        now = time.time() if now is None else now
+        recent = [moment for moment in self._times.get(key, []) if moment > now - self.window]
+        if len(recent) >= self.limit:
+            self._times[key] = recent
+            return False
+        recent.append(now)
+        self._times[key] = recent
+        if len(self._times) > 10_000:  # forget keys that have gone quiet, so the table cannot grow for ever
+            self._times = {k: v for k, v in self._times.items() if v and v[-1] > now - self.window}
+        return True

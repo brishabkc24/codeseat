@@ -493,6 +493,52 @@
   white-space: normal;
 }
 
+/* ---------------------------------------------------------------- the site's admin */
+
+.admin__login {
+  justify-items: start;
+}
+
+.admin__login .field {
+  width: 100%;
+  max-width: 20rem;
+}
+
+.admin__figures {
+  border-block: var(--rule-hair) solid var(--color-rule);
+}
+
+.admin__figures .figure:first-child {
+  padding-left: 0;
+}
+
+/* What the last action did, said once in plain sight. */
+.admin__said {
+  color: var(--color-accent-2);
+}
+
+.admin__blocked {
+  color: var(--color-accent);
+}
+
+.admin__note {
+  max-width: 60ch;
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+
+.admin__password {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: end;
+  gap: var(--space-sm);
+}
+
+.admin__password .input {
+  width: 14rem;
+}
+
 /* ---------------------------------------------------------------- the seat map */
 
 .room {

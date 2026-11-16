@@ -89,6 +89,45 @@ def test_a_class_is_saved_updated_listed_and_deleted(storage):
     assert storage.load_class("ABCDEF") is None
 
 
+def test_the_admin_lists_blocks_and_removes_accounts(storage):
+    older, newer = teacher(1), teacher(2)
+    newer.created_at += 60
+    storage.add_teacher(older)
+    storage.add_teacher(newer)
+    storage.save_class(ClassRecord("ABCDEF", "t1", "Intro", 2, 3, created_at=10.0, updated_at=50.0, state={}))
+    storage.save_class(ClassRecord("GHJKMN", "t1", "Second", 2, 3, created_at=20.0, updated_at=20.0, state={}))
+    storage.save_class(ClassRecord("PQRSTU", "t2", "Theirs", 1, 1, created_at=30.0, updated_at=30.0, state={}))
+    assert [record.id for record in storage.all_teachers()] == ["t2", "t1"]  # newest first
+    assert [record.code for record in storage.all_classes()] == ["ABCDEF", "PQRSTU", "GHJKMN"]  # latest change first
+    assert (storage.count_classes("t1"), storage.count_classes("t2"), storage.count_classes("t9")) == (2, 1, 0)
+
+    # Blocking ends the account's logins and keeps new ones from working.
+    storage.add_session("hash-a", "t1", created_at=100.0, expires_at=200.0)
+    storage.add_session("hash-b", "t2", created_at=100.0, expires_at=200.0)
+    assert storage.set_blocked("t1", True) is True
+    assert storage.teacher_by_id("t1").blocked is True
+    assert storage.teacher_for_session("hash-a", now=150.0) is None
+    storage.add_session("hash-c", "t1", created_at=100.0, expires_at=200.0)
+    assert storage.teacher_for_session("hash-c", now=150.0) is None
+    assert storage.teacher_for_session("hash-b", now=150.0) == newer  # nobody else is touched
+    assert storage.set_blocked("t1", False) is True
+    assert storage.teacher_for_session("hash-c", now=150.0) == older
+    assert storage.set_blocked("t9", True) is False
+
+    # A new password signs the account out everywhere.
+    assert storage.set_password("t1", "new-hash") is True
+    assert storage.teacher_by_id("t1").password_hash == "new-hash"
+    assert storage.teacher_for_session("hash-c", now=150.0) is None
+    assert storage.set_password("t9", "new-hash") is False
+
+    # Deleting an account takes its logins and classes with it, and frees the email.
+    assert storage.delete_teacher("t1") is True
+    assert storage.delete_teacher("t1") is False
+    assert storage.teacher_by_id("t1") is None
+    assert [record.code for record in storage.all_classes()] == ["PQRSTU"]
+    storage.add_teacher(older)
+
+
 def test_a_classroom_goes_through_storage_and_back(storage):
     storage.add_teacher(teacher())
     store = ClassroomStore(storage)

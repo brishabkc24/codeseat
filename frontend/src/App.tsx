@@ -1,6 +1,7 @@
 import { BrowserRouter, Link, Route, Routes } from "react-router-dom";
 import { TopBar } from "./components/TopBar";
 import { SessionProvider } from "./lib/session";
+import { Admin } from "./pages/Admin";
 import { Classes } from "./pages/Classes";
 import { Home } from "./pages/Home";
 import { SignUp } from "./pages/SignUp";
@@ -33,6 +34,7 @@ export function App() {
           <Route path="/class/:code" element={<StudentRoom />} />
           <Route path="/teach" element={<Classes />} />
           <Route path="/teach/:code" element={<TeacherRoom />} />
+          <Route path="/admin" element={<Admin />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </SessionProvider>

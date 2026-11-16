@@ -81,6 +81,50 @@ export function findClass(code: string) {
   return request<ClassInfo & { seatsTaken: number }>(`/api/classes/${encodeURIComponent(code)}`);
 }
 
+// ---- the site's admin: a separate sign-in, with its own cookie
+
+export type AdminTeacher = Teacher & { createdAt: number; blocked: boolean; classes: number };
+
+/** A class as the admin sees it: whose it is, and who is in it at this moment. */
+export type AdminClass = ClassSummary & { teacherId: string; teacherName: string; online: number; teacherHere: boolean };
+
+export type AdminOverview = { teachers: AdminTeacher[]; classes: AdminClass[] };
+
+/** `configured` is false when the site has no admin password, which switches the page off. */
+export type AdminSession = { configured: boolean; admin: boolean };
+
+export function adminSession(): Promise<AdminSession> {
+  return request<AdminSession>("/api/admin/session");
+}
+
+export function adminLogIn(password: string): Promise<AdminSession> {
+  return request<AdminSession>("/api/admin/session", posting({ password }));
+}
+
+export function adminLogOut(): Promise<void> {
+  return request<void>("/api/admin/session", { method: "DELETE" });
+}
+
+export function adminOverview(): Promise<AdminOverview> {
+  return request<AdminOverview>("/api/admin/overview");
+}
+
+export function adminEndClass(code: string): Promise<void> {
+  return request<void>(`/api/admin/classes/${encodeURIComponent(code)}`, { method: "DELETE" });
+}
+
+export function adminBlock(teacherId: string, blocked: boolean): Promise<{ blocked: boolean }> {
+  return request<{ blocked: boolean }>(`/api/admin/teachers/${encodeURIComponent(teacherId)}/block`, posting({ blocked }));
+}
+
+export function adminSetPassword(teacherId: string, password: string): Promise<void> {
+  return request<void>(`/api/admin/teachers/${encodeURIComponent(teacherId)}/password`, posting({ password }));
+}
+
+export function adminDeleteTeacher(teacherId: string): Promise<void> {
+  return request<void>(`/api/admin/teachers/${encodeURIComponent(teacherId)}`, { method: "DELETE" });
+}
+
 // ---- what this browser remembers about its classes
 
 export type StudentIdentity = { name: string; id: string | null };

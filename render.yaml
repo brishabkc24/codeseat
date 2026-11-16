@@ -1,7 +1,9 @@
 # Render blueprint: one free web service built from the Dockerfile.
 # The free plan has no disk that lasts, so DATABASE_URL must point at a
 # Postgres database (for example a free one at neon.com). Render asks for
-# its value when the blueprint is first applied.
+# its value when the blueprint is first applied. CODESEAT_ADMIN_PASSWORD
+# (12 characters or more) switches on the admin page at /admin; leave it
+# empty to keep that page off.
 services:
   - type: web
     name: codeseat
@@ -12,4 +14,6 @@ services:
     autoDeploy: true
     envVars:
       - key: DATABASE_URL
+        sync: false
+      - key: CODESEAT_ADMIN_PASSWORD
         sync: false
